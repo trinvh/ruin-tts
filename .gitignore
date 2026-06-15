@@ -1,0 +1,20 @@
+/target
+**/target
+/ui/dist
+/ui/node_modules
+**/node_modules
+.DS_Store
+*.wav
+!crates/**/assets/*.wav
+/models
+
+# Runtime state (DBs may contain saved API keys) and generated media
+*.db
+*.db-shm
+*.db-wal
+studio-work/
+**/studio-work/
+**/tts-cache/
+*.mp3
+*.mp4
+*.m4a

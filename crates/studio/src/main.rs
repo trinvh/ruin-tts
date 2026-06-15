@@ -1,0 +1,73 @@
+//! studio-server: HTTP API + background worker for the audiobook pipeline.
+//! All settings (API keys, service URLs, render profile) are stored in the DB
+//! and edited from the app's Settings page — not via CLI/env.
+
+use std::sync::Arc;
+
+use anyhow::Result;
+use clap::Parser;
+use studio::config::AppConfig;
+use studio::db::Db;
+use studio::nodes::{register_default, Services};
+use studio::server::{app, run_worker, AppState};
+use studio::workflow::Registry;
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "studio-server",
+    about = "Webnovel → audiobook → YouTube automation"
+)]
+struct Args {
+    #[arg(long, default_value = "127.0.0.1:8090")]
+    addr: String,
+    /// SQLite database path.
+    #[arg(long, default_value = "studio.db")]
+    db: String,
+    /// Working directory for rendered audio/video.
+    #[arg(long, default_value = "studio-work")]
+    work_dir: String,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "studio=info,tower_http=info".into()),
+        )
+        .init();
+    let args = Args::parse();
+
+    let work_dir = std::path::PathBuf::from(&args.work_dir);
+    let cache_dir = work_dir.join("tts-cache");
+    std::fs::create_dir_all(&cache_dir)?;
+
+    let db = Db::connect(&args.db).await?;
+
+    // Load persisted config (from the Settings page), else defaults.
+    let config: AppConfig = match db.load_config_json().await? {
+        Some(json) => serde_json::from_str(&json).unwrap_or_default(),
+        None => AppConfig::default(),
+    };
+    if config.ruin_key.is_empty() {
+        tracing::warn!("Ruin API key not set — configure it in the app's Settings page");
+    }
+
+    let services = Arc::new(Services {
+        db,
+        config: tokio::sync::RwLock::new(config),
+        work_dir,
+        cache_dir,
+    });
+
+    let mut registry = Registry::new();
+    register_default(&mut registry, services.clone());
+    let registry = Arc::new(registry);
+
+    tokio::spawn(run_worker(services.clone(), registry.clone()));
+
+    let state = AppState { services, registry };
+    let listener = tokio::net::TcpListener::bind(&args.addr).await?;
+    tracing::info!("studio-server listening on http://{}", args.addr);
+    axum::serve(listener, app(state)).await?;
+    Ok(())
+}

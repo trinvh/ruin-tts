@@ -1,0 +1,19 @@
+/* Tailwind v4 — theme + utilities only. Preflight (base reset) is deliberately
+   NOT imported so the existing App.css-styled TTS UI is left untouched. New
+   router pages opt into Tailwind utilities. */
+@layer theme, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@theme {
+  --color-canvas: #0d1117;
+  --color-surface: #161b22;
+  --color-surface-2: #1c2333;
+  --color-border: #30363d;
+  --color-ink: #e6edf3;
+  --color-muted: #8b949e;
+  --color-brand: #7c83ff;
+  --color-ok: #3fb950;
+  --color-run: #d29922;
+  --color-fail: #f85149;
+}

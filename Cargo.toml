@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sea-g2p-rs",
+    "crates/vieneu-core",
+    "crates/vieneu-server",
+    "crates/vieneu-cli",
+    "crates/studio",
+]
+# The Tauri demo app has its own dependency universe; build it from ui/src-tauri.
+exclude = ["ui"]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+authors = ["ruin-tts"]
+repository = "https://github.com/ruin/ruin-tts"
+
+[workspace.dependencies]
+sea-g2p-rs = { path = "crates/sea-g2p-rs" }
+vieneu-core = { path = "crates/vieneu-core" }
+
+# ML / inference  (versions verified to resolve together on ndarray 0.17)
+ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
+ndarray = "0.17"
+ndarray-npy = "0.10"
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
+
+# model fetch + io
+hf-hub = "0.5"
+hound = "3.5"
+symphonia = { version = "0.5", features = ["wav", "mp3", "isomp4", "aac", "flac", "pcm"] }
+rubato = "0.15"
+
+# async / server
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["multipart"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# utils
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
+clap = { version = "4", features = ["derive", "env"] }
+
+# studio (webnovel → audiobook → youtube automation)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart"] }
+handlebars = "6"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate", "chrono"] }
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

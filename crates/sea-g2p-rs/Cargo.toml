@@ -1,0 +1,17 @@
+[package]
+name = "sea-g2p-rs"
+version = "0.7.6"
+edition = "2021"
+license = "Apache-2.0"
+description = "Native Rust (PyO3-free) fork of sea-g2p: SE-Asian grapheme-to-phoneme + Vietnamese text normalization"
+repository = "https://github.com/pnnbao97/sea-g2p"
+
+[lib]
+name = "sea_g2p_rs"
+
+[dependencies]
+regex = "1.10"
+fancy-regex = "0.13"
+once_cell = "1.19"
+rayon = "1.10"
+unicode-normalization = "0.1"
