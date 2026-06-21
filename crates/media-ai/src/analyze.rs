@@ -114,3 +114,54 @@ fn speaker_samples(audio: &[f32], segs: &[Segment], speaker: &str, max_seconds: 
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seg(id: i64, start: f64, end: f64, spk: &str) -> Segment {
+        Segment { id, start, end, speaker: spk.into(), text_src: String::new(), lang: "vi".into() }
+    }
+    fn turn(start: f64, end: f64, spk: &str) -> Turn {
+        Turn { start, end, speaker: spk.into() }
+    }
+
+    #[test]
+    fn speaker_for_picks_greatest_overlap() {
+        let turns = vec![turn(0.0, 5.0, "A"), turn(5.0, 10.0, "B")];
+        assert_eq!(speaker_for(1.0, 2.0, &turns), "A");
+        assert_eq!(speaker_for(6.0, 9.0, &turns), "B");
+        // straddles the boundary but leans into B
+        assert_eq!(speaker_for(4.5, 8.0, &turns), "B");
+    }
+
+    #[test]
+    fn speaker_for_defaults_when_no_overlap() {
+        assert_eq!(speaker_for(1.0, 2.0, &[]), "SPEAKER_00");
+        assert_eq!(speaker_for(20.0, 21.0, &[turn(0.0, 5.0, "A")]), "SPEAKER_00");
+    }
+
+    #[test]
+    fn speaker_samples_takes_longest_segments_of_that_speaker() {
+        let audio = vec![0.1f32; 10 * SR as usize]; // 10 s
+        let segs = vec![seg(0, 0.0, 1.0, "A"), seg(1, 2.0, 5.0, "A"), seg(2, 6.0, 7.0, "B")];
+        // speaker A owns 1 s + 3 s = 4 s
+        let out = speaker_samples(&audio, &segs, "A", 12.0);
+        assert_eq!(out.len(), 4 * SR as usize);
+    }
+
+    #[test]
+    fn speaker_samples_stops_at_the_cap() {
+        let audio = vec![0.1f32; 20 * SR as usize];
+        let segs = vec![seg(0, 0.0, 8.0, "A"), seg(1, 9.0, 17.0, "A")];
+        // longest-first: 8 s (total 8 < 12), +8 s (total 16 ≥ 12, stop) → 16 s
+        let out = speaker_samples(&audio, &segs, "A", 12.0);
+        assert_eq!(out.len(), 16 * SR as usize);
+    }
+
+    #[test]
+    fn round3_rounds_to_milliseconds() {
+        assert_eq!(round3(1.23456), 1.235);
+        assert_eq!(round3(0.0), 0.0);
+    }
+}
