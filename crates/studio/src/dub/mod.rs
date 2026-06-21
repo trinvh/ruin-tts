@@ -9,6 +9,7 @@
 
 pub mod api;
 pub mod clients;
+pub mod overlap;
 pub mod pipeline;
 
 use serde::{Deserialize, Serialize};

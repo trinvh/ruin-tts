@@ -21,6 +21,17 @@ pub struct AnalyzeResponse {
     pub language: String,
     pub segments: Vec<AnalyzedSegment>,
     pub speakers: Vec<AnalyzedSpeaker>,
+    /// Overlapping-speech spans with per-speaker transcripts (source separation).
+    #[serde(default)]
+    pub overlaps: Vec<AnalyzedOverlap>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AnalyzedOverlap {
+    pub start: f64,
+    pub end: f64,
+    #[serde(default)]
+    pub texts: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

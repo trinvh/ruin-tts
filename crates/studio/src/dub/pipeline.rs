@@ -80,17 +80,20 @@ pub async fn analyze(services: &Services, project_id: &str) -> Result<()> {
     let client = MediaAiClient::new(base);
     let res = client.analyze(&audio, None, None).await?;
 
-    let segs: Vec<DubSegment> = res
-        .segments
+    // Replace garbled overlap segments with the per-speaker transcripts recovered
+    // by source separation, so each simultaneous speaker is voiced + subtitled.
+    let flat = super::overlap::merge_overlap_segments(&res.segments, &res.overlaps);
+    let segs: Vec<DubSegment> = flat
         .iter()
-        .map(|s| DubSegment {
+        .enumerate()
+        .map(|(i, f)| DubSegment {
             id: uuid::Uuid::new_v4().to_string(),
             project_id: project_id.to_string(),
-            idx: s.id,
-            start_s: s.start,
-            end_s: s.end,
-            speaker: s.speaker.clone(),
-            text_src: s.text_src.clone(),
+            idx: i as i64,
+            start_s: f.start,
+            end_s: f.end,
+            speaker: f.speaker.clone(),
+            text_src: f.text_src.clone(),
             text_vi: String::new(),
             voice: None,
             tts_path: None,
@@ -109,6 +112,18 @@ pub async fn analyze(services: &Services, project_id: &str) -> Result<()> {
             voice: None,
         })
         .collect();
+    // Overlap separation can introduce a speaker (e.g. SPEAKER_01) the per-segment
+    // diarization didn't surface — add it so it still gets a voice.
+    for f in &flat {
+        if !speakers.iter().any(|s| s.speaker == f.speaker) {
+            speakers.push(DubSpeaker {
+                speaker: f.speaker.clone(),
+                gender: None,
+                age: None,
+                voice: None,
+            });
+        }
+    }
     // Auto-map each speaker to a voice matching its detected gender, classifying
     // vieneu voices by the "nam"/"nữ" in their name. Multiple same-gender
     // speakers get DISTINCT voices (round-robin), so a 3-4 person dialogue is
