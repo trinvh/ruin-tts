@@ -15,7 +15,7 @@ CLI     := ./target/release/vieneu
         server server-dev cli voices synth batch smoke \
         ui-install ui-build ui-dev ui-web e2e \
         studio-server studio-web studio-test \
-        media-ai media-ai-run media-ai-pip
+        media-ai media-ai-run media-ai-pip media-ai-rs
 
 ## ── Studio (webnovel → audiobook → YouTube automation) ─────────────
 studio-server: ## Run the studio automation server (set RUIN_API_KEY)
@@ -41,6 +41,9 @@ media-ai-run: ## Run the dubbing sidecar (ASR + diarization); uv auto-creates th
 media-ai-pip: ## Fallback without uv: create a plain venv + install (services/media-ai/.venv)
 	cd services/media-ai && python3 -m venv .venv && ./.venv/bin/pip install -U pip && ./.venv/bin/pip install -e .
 	@echo "Run with: cd services/media-ai && ./.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8099"
+
+media-ai-rs: ## Run the Rust media-ai sidecar (ASR ported; diarization/age-gender WIP)
+	cargo run -p media-ai --release -- --addr $(MEDIA_AI_ADDR)
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \

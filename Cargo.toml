@@ -6,6 +6,7 @@ members = [
     "crates/vieneu-server",
     "crates/vieneu-cli",
     "crates/studio",
+    "crates/media-ai",
 ]
 # The Tauri demo app has its own dependency universe; build it from ui/src-tauri.
 exclude = ["ui"]
