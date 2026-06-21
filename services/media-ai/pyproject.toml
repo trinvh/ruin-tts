@@ -7,13 +7,19 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "python-dotenv>=1.0",
-    "numpy>=1.26",
+    "numpy>=1.26 ; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    # torch 2.2.2 (the last Intel-Mac build) was compiled against NumPy 1.x.
+    "numpy>=1.26,<2 ; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "soundfile>=0.12",
     "librosa>=0.10",
     "mlx-whisper>=0.4.0 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "openai-whisper>=20231117 ; sys_platform != 'darwin' or platform_machine != 'arm64'",
     "pyannote.audio>=3.3.2",
-    "torch>=2.2",
+    # PyTorch dropped macOS x86_64 wheels after 2.2.x, so cap Intel Macs there
+    # (2.2.2 is the last build with an Intel-Mac wheel). Everyone else gets latest.
+    "torch>=2.2 ; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "torch>=2.2,<2.3 ; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "torchaudio>=2.2,<2.3 ; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "transformers>=4.40",
 ]
 
