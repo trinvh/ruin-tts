@@ -11,6 +11,7 @@ use tauri::{Manager, RunEvent};
 
 const TTS_ADDR: &str = "127.0.0.1:8080";
 const STUDIO_ADDR: &str = "127.0.0.1:8090";
+const MEDIA_AI_ADDR: &str = "127.0.0.1:8099";
 
 #[derive(Default)]
 struct Children(Mutex<Vec<Child>>);
@@ -85,11 +86,27 @@ pub fn run() {
             } else {
                 eprintln!("[tauri] vieneu-server not found — start it manually on {TTS_ADDR}");
             }
+            // A bundled app's CWD is `/` (macOS) — give studio-server absolute
+            // db + work paths under the OS app-data dir so it doesn't write junk.
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir());
+            let _ = std::fs::create_dir_all(&data_dir);
+            let db = data_dir.join("studio.db").to_string_lossy().into_owned();
+            let work = data_dir.join("studio-work").to_string_lossy().into_owned();
             // studio-server inherits RUIN_API_KEY / VIENEU_BASE / YT_* from the env.
-            if let Some(c) = spawn("STUDIO_SERVER_BIN", "studio-server", &["--addr", STUDIO_ADDR]) {
+            if let Some(c) = spawn("STUDIO_SERVER_BIN", "studio-server", &["--addr", STUDIO_ADDR, "--db", &db, "--work-dir", &work]) {
                 kids.push(c);
             } else {
                 eprintln!("[tauri] studio-server not found — start it manually on {STUDIO_ADDR}");
+            }
+            // media-ai (ASR + diarization + age/gender) — downloads its models on
+            // first run. Optional age/gender model via MEDIA_AI_AGEGENDER_* env.
+            if let Some(c) = spawn("MEDIA_AI_BIN", "media-ai", &["--addr", MEDIA_AI_ADDR]) {
+                kids.push(c);
+            } else {
+                eprintln!("[tauri] media-ai not found — dubbing analysis unavailable on {MEDIA_AI_ADDR}");
             }
             *app.state::<Children>().0.lock().unwrap() = kids;
             Ok(())

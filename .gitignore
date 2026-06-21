@@ -29,3 +29,6 @@ __pycache__
 .venv/
 **/.venv/
 *.egg-info/
+
+# Sidecar binaries staged for Tauri bundling (CI build outputs)
+/ui/src-tauri/binaries

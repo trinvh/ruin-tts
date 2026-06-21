@@ -31,9 +31,11 @@ jobs:
           - label: macOS (Apple Silicon)
             os: macos-14 # arm64 runner → aarch64-apple-darwin
             ext: ""
+            triple: aarch64-apple-darwin
           - label: Windows (x64)
             os: windows-latest
             ext: ".exe"
+            triple: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
 
@@ -70,11 +72,30 @@ jobs:
       - name: Build Rust workspace (release)
         run: cargo build --release --workspace
 
+      # Stage the server binaries where Tauri's externalBin expects them
+      # (binaries/<name>-<triple>), so the installer bundles them → self-contained.
+      - name: Stage sidecars for bundling (unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p ui/src-tauri/binaries
+          for b in vieneu-server studio-server media-ai; do
+            cp "target/release/$b" "ui/src-tauri/binaries/$b-${{ matrix.triple }}"
+          done
+      - name: Stage sidecars for bundling (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force ui/src-tauri/binaries | Out-Null
+          foreach ($b in 'vieneu-server','studio-server','media-ai') {
+            Copy-Item "target/release/$b.exe" "ui/src-tauri/binaries/$b-${{ matrix.triple }}.exe"
+          }
+
       - name: Install UI dependencies
         run: pnpm -C ui install --frozen-lockfile
 
       # Builds the frontend (beforeBuildCommand) + the Tauri shell and bundles the
-      # installer (.dmg/.app on macOS, .msi/.exe on Windows). Unsigned in CI.
+      # installer with the sidecars (.dmg/.app on macOS, .msi/.exe on Windows).
+      # Unsigned in CI.
       - name: Build Tauri app
         run: pnpm -C ui tauri build
 
