@@ -18,3 +18,14 @@ studio-work/
 *.mp3
 *.mp4
 *.m4a
+__pycache__
+
+# Secrets / local env (media-ai sidecar holds the HuggingFace token)
+.env
+**/.env
+!**/.env.example
+
+# Python virtualenvs / build artifacts
+.venv/
+**/.venv/
+*.egg-info/
