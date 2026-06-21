@@ -69,8 +69,9 @@ diff /tmp/py.json /tmp/rs.json && echo "ASR matches"
 ## 4. Age/gender — export the model, then check output
 
 ```bash
-# export once (any machine with torch)
-pip install torch transformers onnx
+# export once (any machine with torch). transformers must be 4.40.x — newer
+# versions break loading the audeering custom head.
+pip install torch "transformers==4.40.2" onnx onnxscript "numpy<2"
 python tools/export-agegender-onnx.py --out /tmp/agegender.onnx
 
 # run the sidecar pointed at it
@@ -82,9 +83,9 @@ curl -s -XPOST localhost:8099/analyze -H 'content-type: application/json' \
 ```
 
 **Correct looks like:** `speakers[].gender` is `"male"`/`"female"`/`"child"`
-(not null) and `age` is a plausible number of years. Compare to the Python
-sidecar's `speakers` on the same clip — they use the same model, so values
-should be close.
+(not null) and `age` is a number of years. Gender is the reliable signal (it's
+what studio uses for voice mapping); age is approximate and degrades on short or
+synthetic clips. Verified: `say -v Daniel` → `male`, `say -v Samantha` → `female`.
 
 If `gender`/`age` stay null and the log shows an `age/gender inference lỗi`, the
 ONNX output names differ from `logits_age` / `logits_gender` — check the export's

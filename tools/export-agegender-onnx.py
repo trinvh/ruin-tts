@@ -23,29 +23,43 @@ import argparse
 
 import torch
 import torch.nn as nn
-from transformers import AutoModel
+from transformers import Wav2Vec2Model, Wav2Vec2PreTrainedModel
 
 MODEL_ID = "audeering/wav2vec2-large-robust-24-ft-age-gender"
 
 
-class AgeGenderOnnx(nn.Module):
-    """Thin wrapper exposing (logits_age, logits_gender) from the audeering model."""
-
-    def __init__(self, model_id: str = MODEL_ID):
+# The audeering model isn't a stock AutoModel — its age + gender heads must be
+# declared so the checkpoint's `age.*` / `gender.*` weights load (otherwise they
+# are silently dropped). Class copied from the model card.
+class ModelHead(nn.Module):
+    def __init__(self, config, num_labels):
         super().__init__()
-        # trust_remote_code: the repo ships a custom head returning age + gender.
-        self.model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
-        self.model.eval()
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        self.dropout = nn.Dropout(config.final_dropout)
+        self.out_proj = nn.Linear(config.hidden_size, num_labels)
 
-    def forward(self, input_values: torch.Tensor):
-        out = self.model(input_values)
-        # The custom model returns (hidden_states, logits_age, logits_gender)
-        # as a tuple; fall back to attribute access if it's an object.
-        if isinstance(out, (tuple, list)):
-            _, logits_age, logits_gender = out
-        else:
-            logits_age = out.logits_age
-            logits_gender = out.logits_gender
+    def forward(self, x):
+        x = self.dropout(x)
+        x = self.dense(x)
+        x = torch.tanh(x)
+        x = self.dropout(x)
+        return self.out_proj(x)
+
+
+class AgeGenderModel(Wav2Vec2PreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        self.wav2vec2 = Wav2Vec2Model(config)
+        self.age = ModelHead(config, 1)
+        self.gender = ModelHead(config, 3)
+        self.init_weights()
+
+    def forward(self, input_values):
+        hidden = self.wav2vec2(input_values)[0]
+        pooled = torch.mean(hidden, dim=1)
+        logits_age = self.age(pooled)
+        logits_gender = torch.softmax(self.gender(pooled), dim=1)
         return logits_age, logits_gender
 
 
@@ -55,9 +69,9 @@ def main() -> None:
     ap.add_argument("--opset", type=int, default=17)
     args = ap.parse_args()
 
-    model = AgeGenderOnnx()
-    # 1 second of dummy audio at 16 kHz.
-    dummy = torch.zeros(1, 16_000, dtype=torch.float32)
+    model = AgeGenderModel.from_pretrained(MODEL_ID)
+    model.eval()
+    dummy = torch.zeros(1, 16_000, dtype=torch.float32)  # 1 s @ 16 kHz
 
     torch.onnx.export(
         model,
@@ -65,11 +79,10 @@ def main() -> None:
         args.out,
         input_names=["input_values"],
         output_names=["logits_age", "logits_gender"],
-        dynamic_axes={
-            "input_values": {1: "n_samples"},
-        },
+        dynamic_axes={"input_values": {1: "n_samples"}},
         opset_version=args.opset,
         do_constant_folding=True,
+        dynamo=False,
     )
     print(f"wrote {args.out}")
 
