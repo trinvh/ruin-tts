@@ -13,6 +13,8 @@ import {
 
 type Step = "checking" | "ffmpeg" | "models" | "done";
 
+type Prog = { downloaded: number; total: number; file: string; done: boolean };
+
 async function ping(url: string): Promise<boolean> {
   try {
     return (await fetch(url, { cache: "no-store" })).ok;
@@ -20,6 +22,20 @@ async function ping(url: string): Promise<boolean> {
     return false;
   }
 }
+
+/** Read a sidecar's /progress (byte counts), or null if it doesn't expose one. */
+async function fetchProgress(base: string | null): Promise<Prog | null> {
+  if (!base) return null;
+  try {
+    const r = await fetch(`${base}/progress`, { cache: "no-store" });
+    if (!r.ok) return null;
+    return (await r.json()) as Prog;
+  } catch {
+    return null;
+  }
+}
+
+const mb = (n: number) => (n / 1048576).toFixed(0);
 
 /** First-launch setup: ensures ffmpeg is present (offers a download) and waits
  *  for the sidecar servers to finish pulling their models on first run. */
@@ -29,6 +45,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState({ tts: false, studio: false, mediaAi: false });
+  const [prog, setProg] = useState<Prog | null>(null);
 
   const checkFfmpeg = useCallback(async () => {
     const s = await ffmpegStatus();
@@ -46,13 +63,15 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     let alive = true;
     const tick = async () => {
       const [t, s, m] = await Promise.all([serverBase(), studioBase(), mediaAiBase()]);
-      const [tts, studio, mediaAi] = await Promise.all([
+      const [tts, studio, mediaAi, mp] = await Promise.all([
         t ? ping(`${t}/health`) : Promise.resolve(false),
         s ? ping(`${s}/health`) : Promise.resolve(false),
         m ? ping(`${m}/health`) : Promise.resolve(false),
+        fetchProgress(m),
       ]);
       if (!alive) return;
       setReady({ tts, studio, mediaAi });
+      setProg(mp);
       if (tts && studio && mediaAi) {
         setStep("done");
         setTimeout(onDone, 800);
@@ -110,7 +129,13 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <p style={{ fontSize: 12, color: C.muted, margin: "0 0 14px" }}>Đang tải model (lần đầu có thể vài GB) — giữ ứng dụng mở.</p>
             <Row icon="wave" title="Giọng đọc (TTS)" sub="vieneu-server" state={ready.tts ? "done" : "running"} />
             <Row icon="film" title="Phân tích & lồng tiếng" sub="studio-server" state={ready.studio ? "done" : "running"} />
-            <Row icon="runs" title="ASR + diarization" sub="media-ai" state={ready.mediaAi ? "done" : "running"} />
+            <Row
+              icon="runs"
+              title="ASR + diarization"
+              sub={!ready.mediaAi && prog && prog.total > 0 ? `Đã tải ${mb(prog.downloaded)} / ${mb(prog.total)} MB · ${prog.file}` : "media-ai"}
+              state={ready.mediaAi ? "done" : "running"}
+              pct={!ready.mediaAi && prog && prog.total > 0 ? prog.downloaded / prog.total : undefined}
+            />
           </div>
         )}
 
@@ -132,7 +157,7 @@ function Center({ children }: { children: React.ReactNode }) {
   return <div style={{ textAlign: "center", padding: "24px 0", color: C.muted, fontSize: 14 }}>{children}</div>;
 }
 
-function Row({ icon, title, sub, state }: { icon: Parameters<typeof Icon>[0]["name"]; title: string; sub: string; state: "todo" | "running" | "done" }) {
+function Row({ icon, title, sub, state, pct }: { icon: Parameters<typeof Icon>[0]["name"]; title: string; sub: string; state: "todo" | "running" | "done"; pct?: number }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: C.panel2, border: `1px solid ${C.borderSoft}`, borderRadius: 10, marginBottom: 8 }}>
       <div style={{ width: 32, height: 32, flex: "none", borderRadius: 8, background: C.panel3, color: C.purpleLt, display: "grid", placeItems: "center" }}>
@@ -141,6 +166,11 @@ function Row({ icon, title, sub, state }: { icon: Parameters<typeof Icon>[0]["na
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 600 }}>{title}</div>
         <div style={{ fontSize: 10.5, color: C.muted3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sub}</div>
+        {state === "running" && pct !== undefined && (
+          <div style={{ marginTop: 5, height: 4, background: C.panel3, borderRadius: 2, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${Math.min(100, Math.max(2, pct * 100))}%`, background: C.purpleLt, borderRadius: 2, transition: "width .3s" }} />
+          </div>
+        )}
       </div>
       {state === "done" ? (
         <span style={{ color: C.teal }}><Icon name="check" size={16} stroke={2.4} /></span>
