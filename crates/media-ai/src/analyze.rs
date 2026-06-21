@@ -7,7 +7,8 @@ use crate::asr::Asr;
 use crate::audio::{self, SR};
 use crate::diarize::assign_speakers;
 use crate::embed::Embedder;
-use crate::types::{AnalyzeResponse, Segment, Speaker};
+use crate::segment::Segmenter;
+use crate::types::{AnalyzeResponse, OverlapSpan, Segment, Speaker};
 use anyhow::Result;
 use std::collections::BTreeSet;
 
@@ -18,15 +19,23 @@ pub struct Analyzer {
     asr: Asr,
     embedder: Embedder,
     agegender: AgeGenderModel,
+    segmenter: Segmenter,
     threshold: f32,
 }
 
 impl Analyzer {
-    pub fn new(asr: Asr, embedder: Embedder, agegender: AgeGenderModel, threshold: f32) -> Self {
+    pub fn new(
+        asr: Asr,
+        embedder: Embedder,
+        agegender: AgeGenderModel,
+        segmenter: Segmenter,
+        threshold: f32,
+    ) -> Self {
         Self {
             asr,
             embedder,
             agegender,
+            segmenter,
             threshold,
         }
     }
@@ -102,11 +111,20 @@ impl Analyzer {
         let gender_note = (!any_gender && !speakers.is_empty())
             .then(|| "age/gender model chưa được cấu hình".to_string());
 
+        // Overlapping-speech spans (pyannote segmentation), for the dub export.
+        let overlaps = self
+            .segmenter
+            .overlaps(&samples)
+            .into_iter()
+            .map(|(start, end)| OverlapSpan { start, end })
+            .collect();
+
         Ok(AnalyzeResponse {
             language: asr.language,
             segments,
             speakers,
             gender_note,
+            overlaps,
         })
     }
 }

@@ -28,6 +28,13 @@ pub struct Speaker {
     pub age: Option<f64>,
 }
 
+/// A time span where ≥2 speakers talk at once (pyannote segmentation).
+#[derive(Debug, Serialize)]
+pub struct OverlapSpan {
+    pub start: f64,
+    pub end: f64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AnalyzeResponse {
     pub language: String,
@@ -35,4 +42,8 @@ pub struct AnalyzeResponse {
     pub speakers: Vec<Speaker>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gender_note: Option<String>,
+    /// Overlapping-speech spans (empty if no segmentation model). Additive +
+    /// backward-compatible — the Python contract had no such field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlaps: Vec<OverlapSpan>,
 }

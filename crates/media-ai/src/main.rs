@@ -11,6 +11,7 @@ mod diarize;
 mod embed;
 mod models;
 mod onnx;
+mod segment;
 mod types;
 
 use std::sync::Arc;
@@ -64,6 +65,14 @@ struct Args {
     /// Local path to the speaker-embedding ONNX (overrides the repo download).
     #[arg(long, env = "MEDIA_AI_EMBED_PATH")]
     embed_path: Option<String>,
+    /// HF repo holding the pyannote segmentation ONNX (for overlap detection).
+    #[arg(long, env = "MEDIA_AI_SEGMENT_REPO")]
+    segment_repo: Option<String>,
+    #[arg(long, env = "MEDIA_AI_SEGMENT_MODEL", default_value = "model.onnx")]
+    segment_model: String,
+    /// Local path to the pyannote segmentation ONNX (overrides the repo).
+    #[arg(long, env = "MEDIA_AI_SEGMENT_PATH")]
+    segment_path: Option<String>,
     /// Cosine-similarity threshold for diarization clustering.
     #[arg(long, env = "MEDIA_AI_DIARIZE_THRESHOLD")]
     diarize_threshold: Option<f32>,
@@ -99,6 +108,21 @@ fn resolve_embed(args: &Args) -> Result<Option<std::path::PathBuf>> {
     }
 }
 
+/// Resolve the optional pyannote segmentation ONNX: explicit local path, else an
+/// HF repo download, else None (overlap detection disabled).
+fn resolve_segment(args: &Args) -> Result<Option<std::path::PathBuf>> {
+    if let Some(p) = &args.segment_path {
+        return Ok(Some(std::path::PathBuf::from(p)));
+    }
+    match &args.segment_repo {
+        Some(repo) => Ok(Some(
+            models::hf_file(repo, &args.segment_model, args.hf_token.clone())
+                .context("tải model segmentation")?,
+        )),
+        None => Ok(None),
+    }
+}
+
 struct AppState {
     analyzer: Analyzer,
 }
@@ -125,8 +149,10 @@ async fn main() -> Result<()> {
     let agegender = agegender::AgeGenderModel::load(agegender_path.as_deref())?;
     let embed_path = resolve_embed(&args)?;
     let embedder = embed::Embedder::load(embed_path.as_deref())?;
+    let segment_path = resolve_segment(&args)?;
+    let segmenter = segment::Segmenter::load(segment_path.as_deref())?;
     let threshold = args.diarize_threshold.unwrap_or(diarize::DEFAULT_THRESHOLD);
-    let analyzer = Analyzer::new(asr, embedder, agegender, threshold);
+    let analyzer = Analyzer::new(asr, embedder, agegender, segmenter, threshold);
 
     let state = Arc::new(AppState { analyzer });
     let app = Router::new()
