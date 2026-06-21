@@ -1,35 +1,116 @@
-//! Per-speaker age + gender from a voice sample.
-//!
-//! TODO(port): real audeering wav2vec2 age/gender via ONNX (ort). The model must
-//! be exported to ONNX once (see tools/export-agegender-onnx.py) and downloaded
-//! on first run. For now returns unknown — studio then maps voices by their
-//! names (which already encode nam/nữ), so dubbing still works.
+//! Per-speaker age + gender via the audeering wav2vec2 model exported to ONNX
+//! (run with `ort`). The model is exported once (see
+//! tools/export-agegender-onnx.py) and pointed at via `--agegender-*` /
+//! MEDIA_AI_AGEGENDER_*. When no model is configured (or inference fails) this
+//! returns unknown and studio maps voices by their names instead.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use ndarray::{ArrayD, IxDyn};
+use ort::session::{Session, SessionInputValue};
+use ort::value::Tensor;
+use std::borrow::Cow;
+use std::path::Path;
+use std::sync::Mutex;
+
+/// `ort::Error` isn't `Send + Sync`, so convert via `Display` (cf. vieneu-core).
+trait OrtAny<T> {
+    fn any(self) -> Result<T>;
+}
+impl<T, E: std::fmt::Display> OrtAny<T> for std::result::Result<T, E> {
+    fn any(self) -> Result<T> {
+        self.map_err(|e| anyhow::anyhow!(e.to_string()))
+    }
+}
 
 pub struct AgeGender {
     pub gender: Option<String>,
     pub age: Option<f64>,
 }
 
-pub struct AgeGenderModel;
+pub struct AgeGenderModel {
+    // ort's Session::run takes &mut self → Mutex for interior mutability under &self.
+    session: Option<Mutex<Session>>,
+}
 
 impl AgeGenderModel {
-    pub fn load() -> Result<Self> {
-        Ok(Self)
+    /// `model_path` = an exported ONNX; `None` disables age/gender (graceful).
+    pub fn load(model_path: Option<&Path>) -> Result<Self> {
+        let session = match model_path {
+            Some(p) => {
+                let s = Session::builder()
+                    .any()?
+                    .commit_from_file(p)
+                    .any()
+                    .with_context(|| format!("nạp model age/gender {}", p.display()))?;
+                tracing::info!("age/gender: đã nạp model {}", p.display());
+                Some(Mutex::new(s))
+            }
+            None => {
+                tracing::warn!(
+                    "age/gender: chưa cấu hình model (MEDIA_AI_AGEGENDER_REPO/PATH) — bỏ qua"
+                );
+                None
+            }
+        };
+        Ok(Self { session })
     }
 
-    pub fn predict(&self, _samples: &[f32], _sr: u32) -> AgeGender {
-        AgeGender {
+    pub fn predict(&self, samples: &[f32], _sr: u32) -> AgeGender {
+        match self.run(samples) {
+            Ok(ag) => ag,
+            Err(e) => {
+                tracing::warn!("age/gender inference lỗi: {e}");
+                AgeGender {
+                    gender: None,
+                    age: None,
+                }
+            }
+        }
+    }
+
+    fn run(&self, samples: &[f32]) -> Result<AgeGender> {
+        let none = AgeGender {
             gender: None,
             age: None,
+        };
+        let Some(mtx) = &self.session else {
+            return Ok(none);
+        };
+        if samples.is_empty() {
+            return Ok(none);
         }
+        let norm = normalize_waveform(samples);
+        let len = norm.len();
+        let arr: ArrayD<f32> =
+            ArrayD::from_shape_vec(IxDyn(&[1, len]), norm).context("tạo input tensor")?;
+        let feeds: Vec<(Cow<'static, str>, SessionInputValue<'static>)> = vec![(
+            Cow::Borrowed("input_values"),
+            SessionInputValue::from(Tensor::from_array(arr).any()?),
+        )];
+        let mut session = mtx.lock().map_err(|_| anyhow::anyhow!("agegender lock"))?;
+        let out = session.run(feeds).any()?;
+
+        let gender_logits = out["logits_gender"].try_extract_array::<f32>().any()?;
+        let g: Vec<f32> = gender_logits.iter().copied().collect();
+        let gender = (g.len() >= 3)
+            .then(|| gender_from_logits([g[0], g[1], g[2]]))
+            .flatten()
+            .map(str::to_string);
+
+        let age = out["logits_age"]
+            .try_extract_array::<f32>()
+            .any()?
+            .iter()
+            .next()
+            .copied()
+            .map(age_from_raw);
+
+        Ok(AgeGender { gender, age })
     }
 }
 
 /// audeering's wav2vec2 feature extractor z-normalizes the raw waveform
 /// (zero mean, unit variance). Constant/empty input → all zeros (never NaN).
-#[allow(dead_code)] // used by predict() once the ONNX model is wired
 fn normalize_waveform(samples: &[f32]) -> Vec<f32> {
     if samples.is_empty() {
         return Vec::new();
@@ -45,7 +126,6 @@ fn normalize_waveform(samples: &[f32]) -> Vec<f32> {
 }
 
 /// Gender = argmax of the audeering head logits, ordered `[female, male, child]`.
-#[allow(dead_code)]
 fn gender_from_logits(logits: [f32; 3]) -> Option<&'static str> {
     const LABELS: [&str; 3] = ["female", "male", "child"];
     let best = (0..3).max_by(|&a, &b| logits[a].total_cmp(&logits[b]))?;
@@ -53,7 +133,6 @@ fn gender_from_logits(logits: [f32; 3]) -> Option<&'static str> {
 }
 
 /// The age head outputs a value in `[0, 1]`; scale to years, clamp to `[0, 100]`.
-#[allow(dead_code)]
 fn age_from_raw(raw: f32) -> f64 {
     (raw as f64 * 100.0).clamp(0.0, 100.0)
 }

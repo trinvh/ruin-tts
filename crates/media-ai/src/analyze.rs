@@ -66,7 +66,7 @@ impl Analyzer {
         }
 
         let gender_note = (!any_gender && !speakers.is_empty())
-            .then(|| "age/gender chưa được port sang Rust".to_string());
+            .then(|| "age/gender model chưa được cấu hình".to_string());
 
         Ok(AnalyzeResponse {
             language: asr.language,
@@ -120,10 +120,21 @@ mod tests {
     use super::*;
 
     fn seg(id: i64, start: f64, end: f64, spk: &str) -> Segment {
-        Segment { id, start, end, speaker: spk.into(), text_src: String::new(), lang: "vi".into() }
+        Segment {
+            id,
+            start,
+            end,
+            speaker: spk.into(),
+            text_src: String::new(),
+            lang: "vi".into(),
+        }
     }
     fn turn(start: f64, end: f64, spk: &str) -> Turn {
-        Turn { start, end, speaker: spk.into() }
+        Turn {
+            start,
+            end,
+            speaker: spk.into(),
+        }
     }
 
     #[test]
@@ -138,13 +149,20 @@ mod tests {
     #[test]
     fn speaker_for_defaults_when_no_overlap() {
         assert_eq!(speaker_for(1.0, 2.0, &[]), "SPEAKER_00");
-        assert_eq!(speaker_for(20.0, 21.0, &[turn(0.0, 5.0, "A")]), "SPEAKER_00");
+        assert_eq!(
+            speaker_for(20.0, 21.0, &[turn(0.0, 5.0, "A")]),
+            "SPEAKER_00"
+        );
     }
 
     #[test]
     fn speaker_samples_takes_longest_segments_of_that_speaker() {
         let audio = vec![0.1f32; 10 * SR as usize]; // 10 s
-        let segs = vec![seg(0, 0.0, 1.0, "A"), seg(1, 2.0, 5.0, "A"), seg(2, 6.0, 7.0, "B")];
+        let segs = vec![
+            seg(0, 0.0, 1.0, "A"),
+            seg(1, 2.0, 5.0, "A"),
+            seg(2, 6.0, 7.0, "B"),
+        ];
         // speaker A owns 1 s + 3 s = 4 s
         let out = speaker_samples(&audio, &segs, "A", 12.0);
         assert_eq!(out.len(), 4 * SR as usize);

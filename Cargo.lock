@@ -1790,6 +1790,8 @@ dependencies = [
  "clap",
  "hf-hub",
  "hound",
+ "ndarray",
+ "ort",
  "serde",
  "serde_json",
  "tokio",

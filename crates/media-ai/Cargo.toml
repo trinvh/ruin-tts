@@ -20,5 +20,14 @@ tracing-subscriber.workspace = true
 clap.workspace = true
 hf-hub.workspace = true
 hound.workspace = true
+# Age/gender ONNX inference.
+ort.workspace = true
+ndarray.workspace = true
 # ASR. whisper.cpp is built from source via cmake (Metal on macOS / CPU elsewhere).
 whisper-rs = "0.16"
+
+# Intel Macs have no prebuilt ONNX Runtime in ort rc.12 — link dynamically and
+# load it at runtime via ORT_DYLIB_PATH (see docs/MACOS-INTEL.md). Matches
+# vieneu-core so a standalone `cargo build -p media-ai` works there too.
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+ort = { workspace = true, features = ["load-dynamic"] }

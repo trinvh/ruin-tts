@@ -45,6 +45,29 @@ struct Args {
         default_value = "ggml-large-v3-turbo.bin"
     )]
     whisper_model: String,
+    /// HF repo holding the exported age/gender ONNX (omit to disable age/gender).
+    #[arg(long, env = "MEDIA_AI_AGEGENDER_REPO")]
+    agegender_repo: Option<String>,
+    #[arg(long, env = "MEDIA_AI_AGEGENDER_MODEL", default_value = "model.onnx")]
+    agegender_model: String,
+    /// Local path to the age/gender ONNX (overrides the repo download).
+    #[arg(long, env = "MEDIA_AI_AGEGENDER_PATH")]
+    agegender_path: Option<String>,
+}
+
+/// Resolve the optional age/gender ONNX: explicit local path, else an HF repo
+/// download, else None (disabled).
+fn resolve_agegender(args: &Args) -> Result<Option<std::path::PathBuf>> {
+    if let Some(p) = &args.agegender_path {
+        return Ok(Some(std::path::PathBuf::from(p)));
+    }
+    match &args.agegender_repo {
+        Some(repo) => Ok(Some(
+            models::hf_file(repo, &args.agegender_model, args.hf_token.clone())
+                .context("tải model age/gender")?,
+        )),
+        None => Ok(None),
+    }
 }
 
 struct AppState {
@@ -69,10 +92,11 @@ async fn main() -> Result<()> {
     )
     .context("tải model whisper")?;
     let asr = asr::Asr::load(model_path.to_string_lossy().as_ref())?;
+    let agegender_path = resolve_agegender(&args)?;
     let analyzer = Analyzer::new(
         asr,
         diarize::Diarizer::load()?,
-        agegender::AgeGenderModel::load()?,
+        agegender::AgeGenderModel::load(agegender_path.as_deref())?,
     );
 
     let state = Arc::new(AppState { analyzer });
