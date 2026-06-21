@@ -43,18 +43,21 @@ fn copy_file(src: String, dest: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Candidate locations for a sidecar binary, in priority order.
+/// Candidate locations for a sidecar binary, in priority order. The platform
+/// executable suffix (`.exe` on Windows, empty elsewhere) is appended so the
+/// bundled/built binaries are found on every OS.
 fn candidates(env_var: &str, name: &str) -> Vec<PathBuf> {
     let mut v = Vec::new();
     if let Ok(p) = std::env::var(env_var) {
         v.push(p.into());
     }
+    let exe_name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            v.push(dir.join(name));
+            v.push(dir.join(&exe_name));
         }
     }
-    v.push(PathBuf::from(format!("{}/../../target/release/{name}", env!("CARGO_MANIFEST_DIR"))));
+    v.push(PathBuf::from(format!("{}/../../target/release/{exe_name}", env!("CARGO_MANIFEST_DIR"))));
     v
 }
 
