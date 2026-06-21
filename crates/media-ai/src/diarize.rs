@@ -1,9 +1,15 @@
 //! Speaker diarization (who-speaks-when).
 //!
-//! TODO(port): real pyannote diarization via sherpa-onnx (segmentation ONNX +
-//! speaker-embedding ONNX + clustering). For now a single-speaker fallback that
-//! covers the whole clip — correct for monologues (most house-tour source
-//! videos); multi-speaker clips collapse to one speaker until this is ported.
+//! Status: single-speaker fallback covering the whole clip — correct for
+//! monologues (most house-tour source videos); multi-speaker clips collapse to
+//! one speaker until full diarization lands.
+//!
+//! TODO(port): the natural crate (`sherpa-rs`) bundles its own ONNX Runtime,
+//! which would collide with the `ort` runtime the age/gender model links into
+//! the same binary. So real diarization should reuse **ort**: run the pyannote
+//! segmentation ONNX over sliding windows, extract speaker embeddings, then
+//! cluster (agglomerative) — the clustering step is pure and unit-testable; the
+//! ONNX inference + window stitching need on-device validation against pyannote.
 
 use anyhow::Result;
 
