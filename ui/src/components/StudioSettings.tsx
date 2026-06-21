@@ -67,7 +67,7 @@ export function StudioSettings() {
       <div className="cfg-grid">
         <label>Ruin API key {T(cfg.ruin_key, (v) => set({ ruin_key: v }), "ruin_…")}</label>
         <label>Ruin API base {T(cfg.ruin_base, (v) => set({ ruin_base: v }))}</label>
-        <label>VieNeu TTS base {T(cfg.tts_base, (v) => set({ tts_base: v }))}</label>
+        <label>Beesoft TTS base {T(cfg.tts_base, (v) => set({ tts_base: v }))}</label>
       </div>
 
       <h4>Lồng tiếng video (dịch)</h4>
@@ -83,7 +83,7 @@ export function StudioSettings() {
         <label>Giọng nữ ưu tiên (tuỳ chọn) {T(cfg.dub_voice_female, (v) => set({ dub_voice_female: v }), "để trống = tự chọn")}</label>
       </div>
       <p className="muted small">
-        Khi phân tích, mỗi người nói tự được gán giọng theo giới tính — phân loại từ tên giọng vieneu
+        Khi phân tích, mỗi người nói tự được gán giọng theo giới tính — phân loại từ tên giọng Beesoft
         (chứa “nam”/“nữ”), nhiều người cùng giới nhận giọng khác nhau. 2 ô trên chỉ để ưu tiên một giọng
         cụ thể; bạn luôn chỉnh tay lại trong trang Lồng tiếng.
       </p>

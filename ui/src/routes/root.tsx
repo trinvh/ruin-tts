@@ -16,7 +16,7 @@ export function RootLayout() {
         <div className="flex items-center gap-2.5">
           <span className="text-xl text-brand">◐</span>
           <div className="leading-tight">
-            <div className="text-sm font-semibold">VieNeu Studio</div>
+            <div className="text-sm font-semibold">Beesoft Studio</div>
             <div className="text-[11px] text-muted">v3-Turbo · Rust · on-device</div>
           </div>
         </div>

@@ -141,17 +141,7 @@ export function StudioShell() {
 
   return (
     <div className="bss" style={{ height: "100vh", width: "100vw", display: "flex", flexDirection: "column", background: C.appBg, color: "#fff", fontFamily: FONT, fontSize: 13, overflow: "hidden", WebkitFontSmoothing: "antialiased" }}>
-      {/* titlebar */}
-      <div style={{ height: 34, flex: "none", display: "flex", alignItems: "center", padding: "0 14px", background: C.titlebar, borderBottom: `1px solid ${C.borderTab}`, position: "relative" }}>
-        <div style={{ display: "flex", gap: 8 }}>
-          <span style={{ width: 12, height: 12, borderRadius: "50%", background: "#ff5f57" }} />
-          <span style={{ width: 12, height: 12, borderRadius: "50%", background: "#febc2e" }} />
-          <span style={{ width: 12, height: 12, borderRadius: "50%", background: "#28c840" }} />
-        </div>
-        <div style={{ position: "absolute", left: 0, right: 0, textAlign: "center", fontSize: 12.5, fontWeight: 600, color: C.muted, pointerEvents: "none" }}>Beesoft Studio</div>
-      </div>
-
-      {/* tab strip */}
+      {/* tab strip (the OS provides the title bar + window controls) */}
       <div className="tabstrip" style={{ height: 40, flex: "none", display: "flex", alignItems: "flex-end", padding: "0 8px", gap: 3, background: C.titlebar, borderBottom: `1px solid ${C.borderSoft}`, overflowX: "auto" }}>
         {tabs.map((t) => {
           const on = t.id === activeId;

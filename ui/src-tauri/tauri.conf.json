@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "VieNeu TTS",
+  "productName": "Beesoft Studio",
   "version": "0.1.0",
-  "identifier": "com.trinvh.vieneu",
+  "identifier": "com.trinvh.beesoft",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -12,11 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "VieNeu TTS Studio",
+        "title": "Beesoft Studio",
         "width": 1180,
         "height": 820,
         "minWidth": 900,
-        "minHeight": 640
+        "minHeight": 640,
+        "backgroundColor": "#15161d"
       }
     ],
     "security": {

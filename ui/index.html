@@ -1,14 +1,39 @@
 <!doctype html>
-<html lang="en">
+<html lang="vi">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri + React + Typescript</title>
+    <title>Beesoft Studio</title>
+    <style>
+      /* Dark base so the webview never flashes white before React mounts. */
+      html, body, #root { margin: 0; height: 100%; background: #15161d; }
+      #splash {
+        position: fixed; inset: 0; display: grid; place-items: center;
+        background: #15161d;
+        font-family: -apple-system, system-ui, "Segoe UI", sans-serif;
+      }
+      #splash .mark {
+        width: 56px; height: 56px; border-radius: 50%; margin: 0 auto;
+        background: conic-gradient(from 180deg, #9288e0 0 50%, #2d2a44 50% 100%);
+        border: 2px solid #6f64c4;
+        box-shadow: 0 8px 30px rgba(146, 136, 224, 0.35);
+        animation: splash-spin 1.3s linear infinite;
+      }
+      #splash .label { margin-top: 18px; color: #8a8aa0; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; }
+      @keyframes splash-spin { to { transform: rotate(360deg); } }
+    </style>
   </head>
 
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="splash">
+        <div style="text-align: center">
+          <div class="mark"></div>
+          <div class="label">Beesoft Studio</div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -111,7 +111,7 @@ export function StudioPage() {
   }, []);
 
   const saveAs = useCallback(async (it: QueueItem) => {
-    const fname = `vieneu.${it.format}`;
+    const fname = `beesoft.${it.format}`;
     if (isTauri() && it.serverPath) {
       const dest = await saveAsDialog(fname);
       if (dest) await copyFile(it.serverPath, dest);
