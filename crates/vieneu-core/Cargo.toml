@@ -25,6 +25,13 @@ regex = "1.10"
 once_cell = "1.19"
 mp3lame-encoder = "0.2"
 
+# Intel Macs have no prebuilt ONNX Runtime in `ort` rc.12 (pyke dropped
+# x86_64-apple-darwin), so link dynamically and load the system library at
+# runtime via ORT_DYLIB_PATH — see docs/MACOS-INTEL.md. Cargo features are
+# additive, so every other target keeps the default download-binaries path.
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+ort = { workspace = true, features = ["load-dynamic"] }
+
 [dev-dependencies]
 hound.workspace = true
 tracing-subscriber.workspace = true
