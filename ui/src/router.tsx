@@ -4,16 +4,18 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { RootLayout } from "./routes/root";
+import { StudioShell } from "./studio-shell/StudioShell";
 import { StudioPage } from "./routes/studio";
 import { FlowsHome } from "./routes/flowsHome";
 import { FlowsEditor } from "./routes/flowsEditor";
 import { RunsPage } from "./routes/runs";
-import { DubbingPage } from "./routes/dubbing";
 import { SettingsPage } from "./routes/settings";
 import { ApiPage } from "./routes/apiInfo";
 
-const rootRoute = createRootRoute({ component: RootLayout });
+// The Beesoft Studio shell is the app root: it owns the browser-style tab strip,
+// the homepage + dubbing surface (rendered as its own overlays), and hosts the
+// remaining feature pages (TTS / Flows / Runs / Settings / API) via <Outlet/>.
+const rootRoute = createRootRoute({ component: StudioShell });
 
 const studioRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: StudioPage });
 const flowsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/flows", component: FlowsHome });
@@ -23,7 +25,6 @@ const flowsEditorRoute = createRoute({
   component: FlowsEditor,
 });
 const runsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/runs", component: RunsPage });
-const dubbingRoute = createRoute({ getParentRoute: () => rootRoute, path: "/dubbing", component: DubbingPage });
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -36,7 +37,6 @@ const routeTree = rootRoute.addChildren([
   flowsRoute,
   flowsEditorRoute,
   runsRoute,
-  dubbingRoute,
   settingsRoute,
   apiRoute,
 ]);
