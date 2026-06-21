@@ -27,6 +27,37 @@ impl AgeGenderModel {
     }
 }
 
+/// audeering's wav2vec2 feature extractor z-normalizes the raw waveform
+/// (zero mean, unit variance). Constant/empty input → all zeros (never NaN).
+#[allow(dead_code)] // used by predict() once the ONNX model is wired
+fn normalize_waveform(samples: &[f32]) -> Vec<f32> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    let n = samples.len() as f32;
+    let mean = samples.iter().sum::<f32>() / n;
+    let var = samples.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / n;
+    let std = var.sqrt();
+    if std < 1e-7 {
+        return vec![0.0; samples.len()];
+    }
+    samples.iter().map(|x| (x - mean) / std).collect()
+}
+
+/// Gender = argmax of the audeering head logits, ordered `[female, male, child]`.
+#[allow(dead_code)]
+fn gender_from_logits(logits: [f32; 3]) -> Option<&'static str> {
+    const LABELS: [&str; 3] = ["female", "male", "child"];
+    let best = (0..3).max_by(|&a, &b| logits[a].total_cmp(&logits[b]))?;
+    Some(LABELS[best])
+}
+
+/// The age head outputs a value in `[0, 1]`; scale to years, clamp to `[0, 100]`.
+#[allow(dead_code)]
+fn age_from_raw(raw: f32) -> f64 {
+    (raw as f64 * 100.0).clamp(0.0, 100.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
