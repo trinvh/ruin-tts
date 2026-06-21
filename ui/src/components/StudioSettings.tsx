@@ -70,6 +70,24 @@ export function StudioSettings() {
         <label>VieNeu TTS base {T(cfg.tts_base, (v) => set({ tts_base: v }))}</label>
       </div>
 
+      <h4>Lồng tiếng video (dịch)</h4>
+      <p className="muted small">
+        Gemini dịch thoại sang tiếng Việt; media-ai (sidecar Python) tách giọng + nhận diện người
+        nói. Chạy sidecar bằng <code>uvicorn app:app --port 8099</code> trong <code>services/media-ai</code>.
+      </p>
+      <div className="cfg-grid">
+        <label>Gemini API key {T(cfg.gemini_api_key, (v) => set({ gemini_api_key: v }), "AIza…")}</label>
+        <label>Gemini model {T(cfg.gemini_model, (v) => set({ gemini_model: v }), "gemini-2.5-flash")}</label>
+        <label>media-ai base {T(cfg.media_ai_base, (v) => set({ media_ai_base: v }), "http://127.0.0.1:8099")}</label>
+        <label>Giọng nam ưu tiên (tuỳ chọn) {T(cfg.dub_voice_male, (v) => set({ dub_voice_male: v }), "để trống = tự chọn")}</label>
+        <label>Giọng nữ ưu tiên (tuỳ chọn) {T(cfg.dub_voice_female, (v) => set({ dub_voice_female: v }), "để trống = tự chọn")}</label>
+      </div>
+      <p className="muted small">
+        Khi phân tích, mỗi người nói tự được gán giọng theo giới tính — phân loại từ tên giọng vieneu
+        (chứa “nam”/“nữ”), nhiều người cùng giới nhận giọng khác nhau. 2 ô trên chỉ để ưu tiên một giọng
+        cụ thể; bạn luôn chỉnh tay lại trong trang Lồng tiếng.
+      </p>
+
       <h4>YouTube</h4>
       <div className="cfg-grid">
         <label>Client ID {T(cfg.yt_client_id, (v) => set({ yt_client_id: v }))}</label>
@@ -101,6 +119,24 @@ export function StudioSettings() {
         <label>Nhạc mở đầu {T(cfg.profile.intro_music_path, (v) => setP({ intro_music_path: v || null }))}</label>
         <label>Nhạc nền {T(cfg.profile.bg_music_path, (v) => setP({ bg_music_path: v || null }))}</label>
       </div>
+
+      <h4>Giọng đọc (ổn định giọng)</h4>
+      <p className="muted small">
+        Nhiệt độ (temperature) thấp giúp giọng đồng nhất giữa các câu. 0.8 = mặc định engine (dễ
+        "đổi giọng"); thử 0.3–0.5 để giọng ổn định hơn.
+      </p>
+      <div className="cfg-grid">
+        <label>Nhiệt độ (temperature) {N(cfg.profile.voice_temperature, (n) => setP({ voice_temperature: n }))}</label>
+        <label>Top-K {N(cfg.profile.voice_top_k, (n) => setP({ voice_top_k: n }))}</label>
+        <label>Top-P {N(cfg.profile.voice_top_p, (n) => setP({ voice_top_p: n }))}</label>
+        <label>Phạt lặp (rep. penalty) {N(cfg.profile.voice_repetition_penalty, (n) => setP({ voice_repetition_penalty: n }))}</label>
+        <label>Nghỉ giữa câu (giây) {N(cfg.profile.segment_pause, (n) => setP({ segment_pause: n }))}</label>
+        <label>Nghỉ giữa đoạn văn (giây) {N(cfg.profile.paragraph_pause, (n) => setP({ paragraph_pause: n }))}</label>
+      </div>
+      <p className="muted small">
+        Khoảng lặng giữa các câu, và khoảng lặng dài hơn ở cuối mỗi đoạn văn (ngắt dòng) — hợp kể
+        truyện. Mặc định 0.35s / 0.7s. Tăng nếu thấy đọc liên tục quá nhanh.
+      </p>
 
       <h4>Mẫu văn bản</h4>
       <label className="cfg-area">Lời mở đầu<textarea value={cfg.profile.intro_template} onChange={(e) => setP({ intro_template: e.target.value })} /></label>

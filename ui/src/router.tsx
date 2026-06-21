@@ -9,6 +9,7 @@ import { StudioPage } from "./routes/studio";
 import { FlowsHome } from "./routes/flowsHome";
 import { FlowsEditor } from "./routes/flowsEditor";
 import { RunsPage } from "./routes/runs";
+import { DubbingPage } from "./routes/dubbing";
 import { SettingsPage } from "./routes/settings";
 import { ApiPage } from "./routes/apiInfo";
 
@@ -22,6 +23,7 @@ const flowsEditorRoute = createRoute({
   component: FlowsEditor,
 });
 const runsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/runs", component: RunsPage });
+const dubbingRoute = createRoute({ getParentRoute: () => rootRoute, path: "/dubbing", component: DubbingPage });
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -34,6 +36,7 @@ const routeTree = rootRoute.addChildren([
   flowsRoute,
   flowsEditorRoute,
   runsRoute,
+  dubbingRoute,
   settingsRoute,
   apiRoute,
 ]);

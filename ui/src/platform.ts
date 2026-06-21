@@ -50,6 +50,21 @@ export async function pickDirectory(): Promise<string | null> {
   }
 }
 
+export async function pickVideoFile(): Promise<string | null> {
+  if (!isTauri()) return null;
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const res = await open({
+      directory: false,
+      multiple: false,
+      filters: [{ name: "Video", extensions: ["mp4", "mov", "mkv", "webm", "m4v", "avi"] }],
+    });
+    return typeof res === "string" ? res : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function saveAsDialog(defaultPath: string): Promise<string | null> {
   if (!isTauri()) return null;
   try {

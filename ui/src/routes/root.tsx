@@ -4,6 +4,7 @@ const NAV: { to: string; label: string }[] = [
   { to: "/", label: "Đọc (TTS)" },
   { to: "/flows", label: "Flows" },
   { to: "/runs", label: "Runs" },
+  { to: "/dubbing", label: "Lồng tiếng" },
   { to: "/settings", label: "Cài đặt" },
   { to: "/api", label: "API" },
 ];
