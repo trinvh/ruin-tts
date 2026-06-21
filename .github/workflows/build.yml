@@ -1,0 +1,103 @@
+name: build
+
+# Builds the Rust servers/CLI and the Tauri desktop app for the two supported
+# desktop targets — macOS Apple Silicon (M-series) and Windows x64 — and uploads
+# the binaries + installers as artifacts. On a `v*` tag it also publishes them to
+# a GitHub Release.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+# Needed for the tag → GitHub Release step (softprops/action-gh-release).
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS (Apple Silicon)
+            os: macos-14 # arm64 runner → aarch64-apple-darwin
+            ext: ""
+          - label: Windows (x64)
+            os: windows-latest
+            ext: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          # The Tauri app crate (ui/src-tauri) is excluded from the workspace and
+          # has its own target dir, so cache both roots.
+          workspaces: |
+            .
+            ui/src-tauri
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      # Rust servers + CLI (vieneu-server, studio-server, vieneu). ort downloads
+      # the host ONNX Runtime (arm64 macOS / x64 Windows) automatically.
+      - name: Build Rust workspace (release)
+        run: cargo build --release --workspace
+
+      - name: Install UI dependencies
+        run: pnpm -C ui install --frozen-lockfile
+
+      # Builds the frontend (beforeBuildCommand) + the Tauri shell and bundles the
+      # installer (.dmg/.app on macOS, .msi/.exe on Windows). Unsigned in CI.
+      - name: Build Tauri app
+        run: pnpm -C ui tauri build
+
+      - name: Upload server binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: servers-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            target/release/vieneu-server${{ matrix.ext }}
+            target/release/studio-server${{ matrix.ext }}
+            target/release/vieneu${{ matrix.ext }}
+
+      - name: Upload app installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            ui/src-tauri/target/release/bundle/**/*
+
+      - name: Publish to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/release/vieneu-server${{ matrix.ext }}
+            target/release/studio-server${{ matrix.ext }}
+            target/release/vieneu${{ matrix.ext }}
+            ui/src-tauri/target/release/bundle/**/*
