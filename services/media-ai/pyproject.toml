@@ -1,0 +1,21 @@
+[project]
+name = "media-ai"
+version = "0.1.0"
+description = "Audio analysis sidecar for ruin-studio video dubbing (ASR + diarization + age/gender)."
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-dotenv>=1.0",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    "librosa>=0.10",
+    "mlx-whisper>=0.4.0 ; sys_platform == 'darwin'",
+    "openai-whisper>=20231117 ; sys_platform != 'darwin'",
+    "pyannote.audio>=3.3.2",
+    "torch>=2.2",
+    "transformers>=4.40",
+]
+
+[tool.uv]
+package = false
