@@ -1,140 +1,42 @@
-# VieNeu-TTS (Rust) — common commands.
-# Run `make` or `make help` to list targets.
-
-ADDR    ?= 127.0.0.1:8080
-WORKERS ?= 2
-VOICE   ?= Bình An
-TEXT    ?= Xin chào, đây là bản dựng tiếng Việt bằng Rust.
-FORMAT  ?= wav
-OUT     ?= out.$(FORMAT)
-SERVER  := ./target/release/vieneu-server
-CLI     := ./target/release/vieneu
-
+# Beesoft Studio — common commands. Run `make` (or `make help`) to list targets.
 .DEFAULT_GOAL := help
-.PHONY: help build build-debug sidecars test fmt fmt-check clippy clean \
-        server server-dev cli voices synth batch smoke \
-        ui-install ui-build ui-dev ui-web e2e \
-        studio-server studio-web studio-test \
-        media-ai media-ai-run media-ai-pip media-ai-rs upload-models
+.PHONY: help dev build sidecars test fmt clippy clean upload-models
 
-## ── Studio (webnovel → audiobook → YouTube automation) ─────────────
-studio-server: ## Run the studio automation server (set RUIN_API_KEY)
-	cargo run -p studio --bin studio-server -- --addr 127.0.0.1:8090
+# Host target triple (e.g. aarch64-apple-darwin) for staging bundled sidecars.
+TRIPLE := $(shell rustc -vV | sed -n 's/host: //p')
+SIDECARS := vieneu-server studio-server media-ai
+MAIN_CRATES := -p vieneu-core -p vieneu-server -p vieneu-cli -p studio -p media-ai
 
-studio-web: ## Run the studio operator UI (React Flow) dev server
-	pnpm -C studio/web install && pnpm -C studio/web dev
+dev: sidecars ## Run the desktop app in dev mode (UI hot-reload + Rust sidecars)
+	pnpm -C ui install
+	pnpm -C ui tauri dev
 
-studio-test: ## Run studio crate tests
-	cargo test -p studio
+build: sidecars ## Build the self-contained desktop app (single bundled installer)
+	pnpm -C ui install
+	@mkdir -p ui/src-tauri/binaries
+	@for b in $(SIDECARS); do cp "target/release/$$b" "ui/src-tauri/binaries/$$b-$(TRIPLE)"; done
+	pnpm -C ui tauri build
+	@echo "→ installer in ui/src-tauri/target/release/bundle/"
 
-## ── Video dubbing sidecar (services/media-ai, :8099) ───────────────
-MEDIA_AI_ADDR ?= 127.0.0.1:8099
+sidecars: ## Build the release sidecar binaries the app bundles + launches
+	cargo build --release -p vieneu-server -p studio -p media-ai
 
-media-ai: ## Install dubbing sidecar deps via uv (Intel Mac uses CPU whisper)
-	cd services/media-ai && uv sync
-	@echo "Next: put HF_TOKEN in services/media-ai/.env, then 'make media-ai-run'"
+test: ## Run the workspace test suite
+	cargo test --workspace
 
-media-ai-run: ## Run the dubbing sidecar (ASR + diarization); uv auto-creates the venv
-	cd services/media-ai && uv run uvicorn app:app \
-		--host $(word 1,$(subst :, ,$(MEDIA_AI_ADDR))) --port $(word 2,$(subst :, ,$(MEDIA_AI_ADDR)))
+fmt: ## Format the Rust crates
+	cargo fmt $(MAIN_CRATES)
 
-media-ai-pip: ## Fallback without uv: create a plain venv + install (services/media-ai/.venv)
-	cd services/media-ai && python3 -m venv .venv && ./.venv/bin/pip install -U pip && ./.venv/bin/pip install -e .
-	@echo "Run with: cd services/media-ai && ./.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8099"
+clippy: ## Lint the Rust crates (warnings as errors)
+	cargo clippy $(MAIN_CRATES) -- -D warnings
 
-media-ai-rs: ## Run the Rust media-ai sidecar (ASR + diarization + age/gender)
-	cargo run -p media-ai --release -- --addr $(MEDIA_AI_ADDR)
-
-upload-models: ## Export + upload the speaker-embedding + age/gender ONNX to HF (run once)
+upload-models: ## Export + upload the diarization ONNX models to HF (run once)
 	bash tools/upload-models.sh
+
+clean: ## Remove build artifacts
+	cargo clean
+	rm -rf ui/dist ui/node_modules ui/src-tauri/binaries
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
-
-## ── Build & quality ────────────────────────────────────────────────
-build: ## Release build of all crates (core, server, cli)
-	cargo build --workspace --release
-
-build-debug: ## Debug build of all crates
-	cargo build --workspace
-
-sidecars: ## Build just the release server binaries the Tauri app launches
-	cargo build --release -p vieneu-server --bin vieneu-server
-	cargo build --release -p studio --bin studio-server
-
-test: ## Run the full test suite
-	cargo test --workspace
-
-fmt: ## Format the Rust crates (skips the vendored sea-g2p-rs)
-	cargo fmt -p vieneu-core -p vieneu-server -p vieneu-cli
-
-fmt-check: ## Check formatting without writing
-	cargo fmt -p vieneu-core -p vieneu-server -p vieneu-cli -- --check
-
-clippy: ## Lint our crates with warnings as errors
-	cargo clippy -p vieneu-core -p vieneu-server -p vieneu-cli -- -D warnings
-
-clean: ## Remove build artifacts
-	cargo clean
-	rm -rf ui/dist ui/node_modules
-
-## ── Run: server & CLI ──────────────────────────────────────────────
-server: build ## Run the HTTP API server ($(ADDR), $(WORKERS) workers)
-	$(SERVER) --addr $(ADDR) --workers $(WORKERS)
-
-server-dev: ## Run the API via cargo with debug logs (easy restart)
-	RUST_LOG=vieneu_server=debug,ort=warn cargo run -p vieneu-server -- --addr $(ADDR) --workers $(WORKERS)
-
-voices: build ## List built-in preset voices
-	$(CLI) voices
-
-synth: build ## Synthesize TEXT → OUT (VOICE, FORMAT overridable)
-	$(CLI) synth --text "$(TEXT)" --voice "$(VOICE)" --format $(FORMAT) --out $(OUT)
-	@echo "wrote $(OUT)"
-
-batch: build ## Batch: chapters/*.txt → audio/*.$(FORMAT) (set IN/OUTDIR)
-	$(CLI) batch --input-dir $(or $(IN),chapters) --out-dir $(or $(OUTDIR),audio) \
-		--voice "$(VOICE)" --format $(FORMAT) $(if $(WORKERS),--workers $(WORKERS),)
-
-smoke: ## Greedy single-clip smoke test (writes /tmp/vieneu_smoke.wav)
-	cargo run -p vieneu-core --example smoke --release -- "$(TEXT)" /tmp/vieneu_smoke.wav "$(VOICE)"
-
-## ── Tauri desktop app ──────────────────────────────────────────────
-ui-install: ## Install UI dependencies (pnpm)
-	pnpm -C ui install
-
-ui-build: build ui-install ## Production-build the Tauri app bundle
-	pnpm -C ui tauri build
-
-ui-dev: build ui-install ## Run the Tauri app in dev mode (spawns the server)
-	pnpm -C ui tauri dev
-
-ui-web: ui-install ## Frontend-only dev server (browser) → calls API on $(ADDR)
-	pnpm -C ui dev
-
-## ── End-to-end smoke of the live API ───────────────────────────────
-e2e: build ## Boot the server and exercise every endpoint, then shut down
-	@echo "── starting server on $(ADDR) ──"
-	@$(SERVER) --addr $(ADDR) --workers 1 >/tmp/vieneu_e2e.log 2>&1 & echo $$! >/tmp/vieneu_e2e.pid; \
-	trap 'kill $$(cat /tmp/vieneu_e2e.pid) 2>/dev/null' EXIT; \
-	for i in $$(seq 1 90); do curl -fs http://$(ADDR)/health >/dev/null 2>&1 && break; sleep 1; done; \
-	echo "── /v1/info ──";  curl -fs http://$(ADDR)/v1/info; echo; \
-	echo "── /v1/voices ──"; curl -fs http://$(ADDR)/v1/voices | head -c 200; echo; \
-	echo "── /v1/tts (wav) ──"; \
-	  curl -fs -X POST http://$(ADDR)/v1/tts -H 'content-type: application/json' \
-	    -d '{"text":"Kiểm tra đầu cuối.","voice":"$(VOICE)","temperature":0.0}' \
-	    -o /tmp/e2e.wav -w 'http %{http_code} %{size_download} bytes\n'; \
-	echo "── /v1/tts (mp3) ──"; \
-	  curl -fs -X POST http://$(ADDR)/v1/tts -H 'content-type: application/json' \
-	    -d '{"text":"Xuất MP3.","voice":"$(VOICE)","format":"mp3","temperature":0.0}' \
-	    -o /tmp/e2e.mp3 -w 'http %{http_code} %{size_download} bytes\n'; \
-	echo "── async job ──"; \
-	  JOB=$$(curl -fs -X POST http://$(ADDR)/v1/jobs -H 'content-type: application/json' \
-	    -d '{"text":"Công việc bất đồng bộ dài hơn một chút.","format":"mp3"}' \
-	    | sed -n 's/.*"job_id":"\([^"]*\)".*/\1/p'); \
-	  echo "job_id=$$JOB"; \
-	  for i in $$(seq 1 60); do curl -fs http://$(ADDR)/v1/jobs/$$JOB | grep -q '"ready":true' && break; sleep 1; done; \
-	  curl -fs http://$(ADDR)/v1/jobs/$$JOB/download -o /tmp/e2e_job.mp3 -w 'job download http %{http_code} %{size_download} bytes\n'; \
-	echo "── results ──"; file /tmp/e2e.wav /tmp/e2e.mp3 /tmp/e2e_job.mp3; \
-	echo "e2e OK"

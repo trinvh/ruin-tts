@@ -1,10 +1,10 @@
 # ruin-tts — project notes for Claude
 
 ## Running servers — DO NOT start them yourself
-The user **always runs the servers themselves** (`vieneu-server` on :8080,
-`studio-server` on :8090, the optional `media-ai` dubbing sidecar on :8099, and
-the Tauri app via `make ui-dev`). Do **not** start, restart, or kill these
-processes. If you need a server for a quick check, use a throwaway port (e.g.
+The user **always runs the servers themselves** (`vieneu-server`, `studio-server`
+and the `media-ai` dubbing sidecar — each now binds a free port the desktop shell
+picks at runtime — and the Tauri app via `make dev`). Do **not** start, restart,
+or kill these processes. If you need a server for a quick check, use a throwaway port (e.g.
 :8098) and a temp `--db`/`--work-dir`, then kill only that process. Never touch a
 `studio-server`/`vieneu-server` launched from `ui/src-tauri/...` — that one
 belongs to the user's app.
