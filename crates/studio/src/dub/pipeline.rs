@@ -351,11 +351,11 @@ pub async fn build_track(services: &Services, project_id: &str) -> Result<()> {
     let dir = project_dir(services, project_id);
     ensure_dir(&dir).await?;
 
-    // Place each fitted clip at its start time, filling gaps with silence. A
-    // clip that overruns its slot pushes later clips slightly (bounded by the
-    // speed cap) rather than overlapping.
-    let mut parts: Vec<media::AudioPart> = Vec::new();
-    let mut cursor = 0.0_f64;
+    // Place each fitted clip at its *absolute* start time and mix (not serial
+    // concat), so the dub tracks the original timeline exactly — overlapping
+    // speech overlaps in the output instead of being pushed out / drifting.
+    let mut clips: Vec<(PathBuf, f64)> = Vec::new();
+    let mut total = 0.0_f64;
     for seg in &segs {
         let Some(path) = &seg.fitted_path else {
             continue;
@@ -364,19 +364,15 @@ pub async fn build_track(services: &Services, project_id: &str) -> Result<()> {
         let dur = media::probe_duration(&p)
             .await
             .unwrap_or_else(|_| seg.slot());
-        let gap = seg.start_s - cursor;
-        if gap > 0.01 {
-            parts.push(media::AudioPart::Silence(gap));
-            cursor += gap;
-        }
-        parts.push(media::AudioPart::File(p));
-        cursor += dur;
+        let start = seg.start_s.max(0.0);
+        total = total.max(start + dur);
+        clips.push((p, start));
     }
-    if parts.is_empty() {
+    if clips.is_empty() {
         return Err(anyhow!("chưa có đoạn tiếng Việt nào — chạy bước đọc trước"));
     }
     let out = dir.join("vn_track.wav");
-    media::run_ffmpeg(&media::assemble_args(&parts, &out))
+    media::run_ffmpeg(&media::mix_at_times_args(&clips, total, &out))
         .await
         .context("ghép track tiếng Việt")?;
     services
