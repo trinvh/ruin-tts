@@ -36,7 +36,7 @@ use crate::types::AnalyzeRequest;
 /// tools/upload-models.sh); a missing repo just degrades gracefully.
 const MODELS_REPO: &str = "trinvh/ruin-media-ai";
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[command(about = "media-ai: audio analysis sidecar (ASR + diarization + age/gender), Rust port")]
 struct Args {
     #[arg(long, default_value = "127.0.0.1:8099")]
@@ -121,12 +121,13 @@ fn resolve_model(
     model: &str,
     token: Option<String>,
     label: &str,
+    prog: &models::DownloadProgress,
 ) -> Option<std::path::PathBuf> {
     if let Some(p) = path {
         return Some(std::path::PathBuf::from(p));
     }
     let repo = repo.as_ref()?;
-    match models::hf_file(repo, model, token) {
+    match models::hf_file_with_progress(repo, model, token, prog) {
         Ok(p) => Some(p),
         Err(e) => {
             tracing::warn!("không tải được model {label} ({repo}/{model}): {e} — bỏ qua");
@@ -135,8 +136,64 @@ fn resolve_model(
     }
 }
 
+/// Download (with progress) + load every model and assemble the analyzer. Runs
+/// off the HTTP thread so `/progress` + `/health` stay responsive meanwhile.
+fn build_analyzer(args: &Args, prog: &models::DownloadProgress) -> Result<Analyzer> {
+    let model_path = models::hf_file_with_progress(
+        &args.whisper_repo,
+        &args.whisper_model,
+        args.hf_token.clone(),
+        prog,
+    )
+    .context("tải model whisper")?;
+    let asr = asr::Asr::load(model_path.to_string_lossy().as_ref())?;
+    let tok = args.hf_token.clone();
+    let agegender_path = resolve_model(
+        &args.agegender_path,
+        &args.agegender_repo,
+        &args.agegender_model,
+        tok.clone(),
+        "age/gender",
+        prog,
+    );
+    let agegender = agegender::AgeGenderModel::load(agegender_path.as_deref())?;
+    let embed_path = resolve_model(
+        &args.embed_path,
+        &args.embed_repo,
+        &args.embed_model,
+        tok.clone(),
+        "speaker-embedding",
+        prog,
+    );
+    let embedder = embed::Embedder::load(embed_path.as_deref())?;
+    let segment_path = resolve_model(
+        &args.segment_path,
+        &args.segment_repo,
+        &args.segment_model,
+        tok.clone(),
+        "segmentation",
+        prog,
+    );
+    let segmenter = segment::Segmenter::load(segment_path.as_deref())?;
+    let separate_path = resolve_model(
+        &args.separate_path,
+        &args.separate_repo,
+        &args.separate_model,
+        tok,
+        "separation",
+        prog,
+    );
+    let separator = separate::Separator::load(separate_path.as_deref())?;
+    let threshold = args.diarize_threshold.unwrap_or(diarize::DEFAULT_THRESHOLD);
+    Ok(Analyzer::new(
+        asr, embedder, agegender, segmenter, separator, threshold,
+    ))
+}
+
 struct AppState {
-    analyzer: Analyzer,
+    // Built in the background while the server already serves /health + /progress.
+    analyzer: std::sync::RwLock<Option<Arc<Analyzer>>>,
+    progress: models::DownloadProgress,
 }
 
 #[tokio::main]
@@ -149,72 +206,70 @@ async fn main() -> Result<()> {
         .init();
     let args = Args::parse();
 
-    tracing::info!("nạp model (lần đầu sẽ tải về)…");
-    let model_path = models::hf_file(
-        &args.whisper_repo,
-        &args.whisper_model,
-        args.hf_token.clone(),
-    )
-    .context("tải model whisper")?;
-    let asr = asr::Asr::load(model_path.to_string_lossy().as_ref())?;
-    let tok = args.hf_token.clone();
-    let agegender_path = resolve_model(
-        &args.agegender_path,
-        &args.agegender_repo,
-        &args.agegender_model,
-        tok.clone(),
-        "age/gender",
-    );
-    let agegender = agegender::AgeGenderModel::load(agegender_path.as_deref())?;
-    let embed_path = resolve_model(
-        &args.embed_path,
-        &args.embed_repo,
-        &args.embed_model,
-        tok.clone(),
-        "speaker-embedding",
-    );
-    let embedder = embed::Embedder::load(embed_path.as_deref())?;
-    let segment_path = resolve_model(
-        &args.segment_path,
-        &args.segment_repo,
-        &args.segment_model,
-        tok,
-        "segmentation",
-    );
-    let segmenter = segment::Segmenter::load(segment_path.as_deref())?;
-    let separate_path = resolve_model(
-        &args.separate_path,
-        &args.separate_repo,
-        &args.separate_model,
-        args.hf_token.clone(),
-        "separation",
-    );
-    let separator = separate::Separator::load(separate_path.as_deref())?;
-    let threshold = args.diarize_threshold.unwrap_or(diarize::DEFAULT_THRESHOLD);
-    let analyzer = Analyzer::new(asr, embedder, agegender, segmenter, separator, threshold);
-
-    let state = Arc::new(AppState { analyzer });
-    let app = Router::new()
-        .route("/health", get(health))
-        .route("/analyze", post(analyze_handler))
-        .with_state(state);
-
+    // Bind first so the desktop onboarding can poll /progress + /health while the
+    // (multi-GB, first-run) models download in the background.
     let listener = tokio::net::TcpListener::bind(&args.addr)
         .await
         .with_context(|| format!("bind {}", args.addr))?;
     tracing::info!("media-ai (rust) lắng nghe trên http://{}", args.addr);
+
+    let state = Arc::new(AppState {
+        analyzer: std::sync::RwLock::new(None),
+        progress: models::DownloadProgress::default(),
+    });
+    {
+        let state = state.clone();
+        let args = args.clone();
+        std::thread::spawn(move || {
+            tracing::info!("nạp model (lần đầu sẽ tải về)…");
+            match build_analyzer(&args, &state.progress) {
+                Ok(a) => {
+                    *state.analyzer.write().unwrap() = Some(Arc::new(a));
+                    state.progress.set_done();
+                    tracing::info!("media-ai sẵn sàng");
+                }
+                Err(e) => tracing::error!("nạp model thất bại: {e}"),
+            }
+        });
+    }
+
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/progress", get(progress_handler))
+        .route("/analyze", post(analyze_handler))
+        .with_state(state);
     axum::serve(listener, app).await?;
     Ok(())
 }
 
-async fn health() -> Json<serde_json::Value> {
-    Json(json!({ "status": "ok", "impl": "rust" }))
+async fn health(State(st): State<Arc<AppState>>) -> impl IntoResponse {
+    let ready = st.analyzer.read().unwrap().is_some();
+    let code = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        code,
+        Json(json!({ "status": if ready { "ok" } else { "loading" }, "impl": "rust" })),
+    )
+}
+
+async fn progress_handler(State(st): State<Arc<AppState>>) -> Json<models::DownloadStatus> {
+    Json(st.progress.snapshot())
 }
 
 async fn analyze_handler(
     State(st): State<Arc<AppState>>,
     Json(req): Json<AnalyzeRequest>,
 ) -> impl IntoResponse {
+    let Some(analyzer) = st.analyzer.read().unwrap().clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "detail": "đang tải model — thử lại sau" })),
+        )
+            .into_response();
+    };
     if !std::path::Path::new(&req.audio_path).is_file() {
         return (
             StatusCode::BAD_REQUEST,
@@ -224,8 +279,7 @@ async fn analyze_handler(
     }
     // ASR is CPU-heavy → run off the async runtime.
     let res = tokio::task::spawn_blocking(move || {
-        st.analyzer
-            .analyze(&req.audio_path, req.hint_lang.as_deref(), req.num_speakers)
+        analyzer.analyze(&req.audio_path, req.hint_lang.as_deref(), req.num_speakers)
     })
     .await;
     match res {
