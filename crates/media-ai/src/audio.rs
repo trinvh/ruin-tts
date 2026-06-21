@@ -26,6 +26,17 @@ pub fn load_wav_16k_mono(path: &str) -> Result<Vec<f32>> {
     Ok(downmix(interleaved, channels))
 }
 
+/// Average interleaved channels down to mono; `channels <= 1` passes through.
+fn downmix(interleaved: Vec<f32>, channels: usize) -> Vec<f32> {
+    if channels <= 1 {
+        return interleaved;
+    }
+    interleaved
+        .chunks(channels)
+        .map(|c| c.iter().sum::<f32>() / channels as f32)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
