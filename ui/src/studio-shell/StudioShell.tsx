@@ -201,7 +201,7 @@ export function StudioShell() {
         {/* project editor tabs — kept mounted per tab */}
         {projectTabs.map((t) => (
           <div key={t.id} style={{ position: "absolute", inset: 0, display: t.id === activeId ? "block" : "none" }}>
-            <VideoStudio title={t.title} />
+            <VideoStudio projectId={t.projectId ?? ""} title={t.title} />
           </div>
         ))}
       </div>

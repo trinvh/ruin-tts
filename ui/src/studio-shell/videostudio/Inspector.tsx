@@ -1,12 +1,15 @@
 import { C, FONT, MONO } from "../theme";
 import { Icon, type IconName } from "../icons";
 import { SUBC } from "./constants";
+import { segIdOfClip } from "./seed";
 import type { StudioActions, StudioState } from "./useStudio";
+import type { DubProjectHook } from "./useDubProject";
 import type { Clip } from "./types";
 
 interface Props {
   state: StudioState;
   actions: StudioActions;
+  dub: DubProjectHook;
 }
 
 const SECTION: React.CSSProperties = { fontSize: 11, fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase", color: C.muted2, marginBottom: 13 };
@@ -45,8 +48,14 @@ function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
 
 const Divider = () => <div style={{ height: 1, background: C.border, margin: "18px 0" }} />;
 
-export function Inspector({ state, actions }: Props) {
+export function Inspector({ state, actions, dub }: Props) {
   const sel = state.clips.find((c: Clip) => c.id === state.sel) ?? null;
+  const subSegId = sel && sel.type === "sub" && sel.id.startsWith("svi_") ? segIdOfClip(sel.id) : null;
+  const commitSub = (text: string) => {
+    if (!subSegId) return;
+    const seg = dub.detail?.segments.find((s) => s.id === subSegId);
+    void dub.setSegment(subSegId, text, seg?.voice ?? null);
+  };
 
   let name = "—";
   let kind = "";
@@ -122,12 +131,15 @@ export function Inspector({ state, actions }: Props) {
 
         {sel && sel.type === "sub" && (
           <>
-            <div style={{ ...SECTION, marginBottom: 11 }}>Nội dung</div>
+            <div style={{ ...SECTION, marginBottom: 11 }}>{subSegId ? "Nội dung (tiếng Việt)" : "Nội dung (gốc)"}</div>
             <input
               value={sel.text ?? ""}
+              readOnly={!subSegId}
               onChange={(e) => actions.setClipText(e.target.value)}
-              style={{ width: "100%", background: C.inset, border: `1px solid ${C.borderInset}`, borderRadius: 7, color: "#fff", fontFamily: FONT, fontSize: 13.5, padding: "9px 11px", outline: "none", marginBottom: 18 }}
+              onBlur={(e) => commitSub(e.target.value)}
+              style={{ width: "100%", background: C.inset, border: `1px solid ${C.borderInset}`, borderRadius: 7, color: subSegId ? "#fff" : C.muted, fontFamily: FONT, fontSize: 13.5, padding: "9px 11px", outline: "none", marginBottom: 18 }}
             />
+            {!subSegId && <div style={{ fontSize: 10.5, color: C.muted3, marginTop: -12, marginBottom: 16 }}>Phụ đề gốc chỉ để xem. Sửa bản dịch ở track “Phụ đề Việt”.</div>}
             <div style={{ ...SECTION, marginBottom: 11 }}>Kiểu chữ</div>
             <Slider label="Cỡ chữ" labelW={54} min={18} max={52} value={state.subStyle.size} onChange={(v) => actions.setSubNum("size", v)} display={`${state.subStyle.size}`} />
             <Slider label="Vị trí" labelW={54} min={20} max={92} value={state.subStyle.pos} onChange={(v) => actions.setSubNum("pos", v)} display={`${state.subStyle.pos}`} />

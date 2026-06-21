@@ -1,14 +1,16 @@
 import { C, FONT, MONO } from "../theme";
 import { Icon } from "../icons";
 import { HoverBox } from "../ui";
-import type { StudioActions, StudioState } from "./useStudio";
-import type { Clip } from "./types";
+import { dubStatus } from "../tabs";
+import { ORDER, type DubProjectHook } from "./useDubProject";
 
 interface Props {
   title: string;
   onTitle: (v: string) => void;
-  state: StudioState;
-  actions: StudioActions;
+  onTitleCommit: (v: string) => void;
+  snap: boolean;
+  onToggleSnap: () => void;
+  dub: DubProjectHook;
 }
 
 const iconBtn: React.CSSProperties = {
@@ -17,10 +19,17 @@ const iconBtn: React.CSSProperties = {
 };
 const iconHover: React.CSSProperties = { background: C.panel3, color: "#fff" };
 
-export function TopBar({ title, onTitle, state, actions }: Props) {
-  const sel = state.clips.find((c: Clip) => c.id === state.sel);
-  const hasDubVid = !!(sel && sel.type === "video");
-  const snap = state.snap;
+export function TopBar({ title, onTitle, onTitleCommit, snap, onToggleSnap, dub }: Props) {
+  const status = dub.detail?.project.status ?? "";
+  const working = dub.busy || dub.autoRun;
+  const st = dubStatus(status || "created");
+  const statusText = dub.autoRun ? "Đang chạy…" : st.label;
+  const statusColor = working ? C.orange : status === "failed" ? C.pink : status === "done" ? C.teal : C.muted;
+
+  const synthDone = dub.reachedIdx >= ORDER.indexOf("synthesized");
+  const canAuto = !!dub.detail && !working && !synthDone;
+  const exporting = status === "exporting";
+  const canExport = !!dub.detail && !working;
 
   return (
     <div style={{ height: 48, flex: "none", display: "flex", alignItems: "center", padding: "0 14px", gap: 12, background: C.panel, borderBottom: `1px solid ${C.border}` }}>
@@ -33,27 +42,31 @@ export function TopBar({ title, onTitle, state, actions }: Props) {
           <input
             value={title}
             onChange={(e) => onTitle(e.target.value)}
+            onBlur={(e) => onTitleCommit(e.target.value)}
             spellCheck={false}
             style={{ background: "transparent", border: "1px solid transparent", borderRadius: 5, color: "#fff", fontFamily: FONT, fontSize: 14, fontWeight: 600, padding: "2px 6px", margin: "-2px -6px", maxWidth: 280, letterSpacing: "-.01em" }}
           />
-          <span style={{ fontSize: 10.5, color: C.teal, fontWeight: 500, display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.teal, display: "inline-block" }} />
-            Đã lưu
+          <span style={{ fontSize: 10.5, color: statusColor, fontWeight: 500, display: "flex", alignItems: "center", gap: 4 }}>
+            {working ? (
+              <span style={{ width: 10, height: 10, border: `2px solid ${statusColor}`, borderTopColor: "transparent", borderRadius: "50%", animation: "bss-spin .7s linear infinite", display: "inline-block" }} />
+            ) : (
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: statusColor, display: "inline-block" }} />
+            )}
+            {statusText}
+            {dub.busy && (
+              <button onClick={() => void dub.cancel()} style={{ marginLeft: 6, border: "none", background: "transparent", color: C.steel, fontSize: 10.5, textDecoration: "underline", cursor: "pointer", fontFamily: FONT }}>huỷ</button>
+            )}
           </span>
         </div>
       </div>
 
       {/* undo / redo / snap */}
       <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 4 }}>
-        <HoverBox as="button" title="Hoàn tác" style={iconBtn} hoverStyle={iconHover}>
-          <Icon name="undo" size={17} />
-        </HoverBox>
-        <HoverBox as="button" title="Làm lại" style={iconBtn} hoverStyle={iconHover}>
-          <Icon name="redo" size={17} />
-        </HoverBox>
+        <HoverBox as="button" title="Hoàn tác" style={iconBtn} hoverStyle={iconHover}><Icon name="undo" size={17} /></HoverBox>
+        <HoverBox as="button" title="Làm lại" style={iconBtn} hoverStyle={iconHover}><Icon name="redo" size={17} /></HoverBox>
         <div style={{ width: 1, height: 22, background: C.border, margin: "0 6px" }} />
         <button
-          onClick={actions.toggleSnap}
+          onClick={onToggleSnap}
           title="Bám dính"
           style={{ height: 32, padding: "0 11px", border: `1px solid ${snap ? "rgba(234,124,105,.5)" : C.border}`, background: snap ? "rgba(234,124,105,.16)" : "transparent", color: snap ? C.coral : C.steel, borderRadius: 7, display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontFamily: FONT, fontSize: 12.5, fontWeight: 500 }}
         >
@@ -65,14 +78,14 @@ export function TopBar({ title, onTitle, state, actions }: Props) {
         </button>
       </div>
 
-      {/* right: run-all / quality / export */}
+      {/* right: auto-dub / quality / export */}
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10 }}>
         <HoverBox
           as="button"
-          onClick={() => hasDubVid && actions.runAll()}
-          title="Chạy tự động cả 4 bước cho video đang chọn"
-          style={{ height: 34, padding: "0 13px", border: "1px solid rgba(146,136,224,.5)", background: "rgba(146,136,224,.12)", color: C.purpleLt, borderRadius: 8, display: "flex", alignItems: "center", gap: 8, cursor: hasDubVid ? "pointer" : "default", opacity: hasDubVid ? 1 : 0.45, fontFamily: FONT, fontSize: 13, fontWeight: 600 }}
-          hoverStyle={hasDubVid ? { background: "rgba(146,136,224,.22)", color: "#fff" } : undefined}
+          onClick={() => canAuto && void dub.runTo("synthesized")}
+          title="Tự chạy tách giọng → phân tích → dịch → đọc TTS"
+          style={{ height: 34, padding: "0 13px", border: "1px solid rgba(146,136,224,.5)", background: "rgba(146,136,224,.12)", color: C.purpleLt, borderRadius: 8, display: "flex", alignItems: "center", gap: 8, cursor: canAuto ? "pointer" : "default", opacity: canAuto ? 1 : 0.45, fontFamily: FONT, fontSize: 13, fontWeight: 600 }}
+          hoverStyle={canAuto ? { background: "rgba(146,136,224,.22)", color: "#fff" } : undefined}
         >
           <Icon name="runAll" size={15} color="currentColor" />
           Lồng tiếng tự động
@@ -87,12 +100,14 @@ export function TopBar({ title, onTitle, state, actions }: Props) {
         </HoverBox>
         <HoverBox
           as="button"
-          style={{ height: 34, padding: "0 18px", border: "none", background: C.coral, color: "#fff", borderRadius: 8, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontFamily: FONT, fontSize: 13.5, fontWeight: 600, boxShadow: "0 4px 14px rgba(234,124,105,.4)" }}
-          hoverStyle={{ background: C.coralLt }}
-          activeStyle={{ transform: "scale(.97)" }}
+          onClick={() => canExport && void dub.runTo("done")}
+          title="Ghép track + xuất video tiếng Việt"
+          style={{ height: 34, padding: "0 18px", border: "none", background: C.coral, color: "#fff", borderRadius: 8, display: "flex", alignItems: "center", gap: 8, cursor: canExport ? "pointer" : "default", opacity: canExport ? 1 : 0.55, fontFamily: FONT, fontSize: 13.5, fontWeight: 600, boxShadow: "0 4px 14px rgba(234,124,105,.4)" }}
+          hoverStyle={canExport ? { background: C.coralLt } : undefined}
+          activeStyle={canExport ? { transform: "scale(.97)" } : undefined}
         >
           <Icon name="export" size={16} stroke={1.9} />
-          Xuất video
+          {exporting ? "Đang xuất…" : "Xuất video"}
         </HoverBox>
       </div>
     </div>

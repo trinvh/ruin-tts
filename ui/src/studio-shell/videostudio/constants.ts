@@ -109,8 +109,8 @@ export interface ClipColors {
 export function clipColors(c: Clip): ClipColors {
   if (c.type === "video" || c.type === "image") {
     return {
-      bg: C.panel3,
-      bgImg: `url('${c.thumb}')`,
+      bg: c.type === "video" ? "#2b2330" : C.panel3,
+      bgImg: c.thumb ? `url('${c.thumb}')` : "none",
       scrim: "linear-gradient(180deg,rgba(15,16,22,.05),rgba(15,16,22,.6))",
       textColor: "#fff",
       isAudio: false,

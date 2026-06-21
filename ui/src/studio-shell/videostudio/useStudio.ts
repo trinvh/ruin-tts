@@ -44,6 +44,8 @@ export interface StudioActions {
   zoomOut: () => void;
   splitSel: () => void;
   delSel: () => void;
+  /** Replace the timeline clips (used to seed the editor from a real project). */
+  replaceClips: (clips: Clip[]) => void;
 }
 
 export interface StudioRefs {
@@ -388,13 +390,19 @@ export function useStudio(): { state: StudioState; actions: StudioActions; refs:
 
   const setTab = useCallback((t: "media" | "dub") => update(() => ({ tab: t })), [update]);
 
+  const replaceClips = useCallback(
+    (clips: Clip[]) =>
+      update((s) => ({ clips, sel: clips.some((c) => c.id === s.sel) ? s.sel : (clips[0]?.id ?? null) })),
+    [update],
+  );
+
   const actions: StudioActions = {
     setTab, onMove, onUp, imgDown, clipDown, rulerDown, deselect, togglePlay, toStart,
     setPrev: (el) => { prevRef.current = el; },
     setLane: (el) => { laneRef.current = el; },
     getDub, patchDub, run, runAll, insertSubs, insertTts, addVideo, addImage, addMusic,
     setClipNum, setClipText, resetColor, setSubNum, setSubColor, toggleSubBg, toggleBil,
-    setVoice, toggleSnap, setAspect, zoomIn, zoomOut, splitSel, delSel,
+    setVoice, toggleSnap, setAspect, zoomIn, zoomOut, splitSel, delSel, replaceClips,
   };
 
   return { state, actions, refs: { prev: prevRef, lane: laneRef } };

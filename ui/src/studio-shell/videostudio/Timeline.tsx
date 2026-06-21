@@ -1,32 +1,44 @@
+import { useRef } from "react";
 import { C, FONT, MONO } from "../theme";
 import { Icon } from "../icons";
 import { HoverBox } from "../ui";
 import { bars, clipColors, fmt, totalDur, TRACK_ORDER, trackDot, trackLabel } from "./constants";
 import type { StudioActions, StudioState } from "./useStudio";
+import type { Transport } from "./useTransport";
 import type { Clip } from "./types";
 
 interface Props {
   state: StudioState;
   actions: StudioActions;
+  transport: Transport;
 }
 
 const stop = (e: React.MouseEvent) => e.stopPropagation();
 const toolBtn: React.CSSProperties = { height: 26, padding: "0 9px", border: "none", background: "transparent", borderRadius: 6, display: "flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 12 };
 const zoomBtn: React.CSSProperties = { width: 26, height: 26, border: "none", background: C.panel2, color: C.steel, borderRadius: 6, display: "grid", placeItems: "center", cursor: "pointer" };
 
-export function Timeline({ state, actions }: Props) {
-  const { clips, sel, playhead: ph } = state;
-  const TT = totalDur(clips);
+export function Timeline({ state, actions, transport }: Props) {
+  const { clips, sel } = state;
+  const ph = transport.time;
+  const TT = Math.max(transport.duration || 0, totalDur(clips));
   const selClip = clips.find((c: Clip) => c.id === sel) ?? null;
-  const dubSel = selClip && selClip.type === "video" ? selClip.id : null;
-  const tachDone = dubSel ? actions.getDub(dubSel).pipe.tach === "done" : false;
+  const tachDone = clips.some((c) => c.track === "A1" && c.kind === "vocals");
 
   const present = [...new Set(clips.map((c) => c.track))].sort((a, b) => (TRACK_ORDER[a] ?? 9) - (TRACK_ORDER[b] ?? 9));
   const ticks: { left: string; label: string }[] = [];
-  for (let t = 0; t <= TT; t++) ticks.push({ left: ((t / TT) * 100).toFixed(2), label: fmt(t).slice(3) });
+  for (let s = 0; s <= TT; s++) ticks.push({ left: ((s / TT) * 100).toFixed(2), label: fmt(s).slice(3) });
 
   const splitOn = !!selClip;
   const delOn = !!(selClip && selClip.id !== "vid");
+
+  // ruler scrubbing → drive the real video transport
+  const rulerRef = useRef<HTMLDivElement | null>(null);
+  const scrubbing = useRef(false);
+  const seekFrom = (clientX: number) => {
+    const r = rulerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    transport.seek(Math.max(0, Math.min(TT, ((clientX - r.left) / r.width) * TT)));
+  };
 
   return (
     <div style={{ height: "33vh", flex: "none", background: C.panel, borderTop: `1px solid ${C.border}`, display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -63,7 +75,18 @@ export function Timeline({ state, actions }: Props) {
 
         <div ref={(el) => actions.setLane(el)} onClick={() => actions.deselect()} style={{ flex: 1, position: "relative", overflowY: "auto", overflowX: "hidden", background: C.laneBg }}>
           {/* ruler */}
-          <div onPointerDown={(e) => actions.rulerDown(e)} onClick={stop} style={{ height: 26, position: "relative", borderBottom: `1px solid ${C.borderSoft}`, cursor: "ew-resize", background: C.ruler }}>
+          <div
+            ref={rulerRef}
+            onClick={stop}
+            onPointerDown={(e) => {
+              (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+              scrubbing.current = true;
+              seekFrom(e.clientX);
+            }}
+            onPointerMove={(e) => scrubbing.current && seekFrom(e.clientX)}
+            onPointerUp={() => { scrubbing.current = false; }}
+            style={{ height: 26, position: "relative", borderBottom: `1px solid ${C.borderSoft}`, cursor: "ew-resize", background: C.ruler }}
+          >
             {ticks.map((tk, i) => (
               <div key={i} style={{ position: "absolute", top: 0, bottom: 0, left: `${tk.left}%`, borderLeft: `1px solid ${C.tick}`, paddingLeft: 5, display: "flex", alignItems: "center" }}>
                 <span style={{ fontSize: 9.5, color: C.muted3, fontFamily: MONO }}>{tk.label}</span>
@@ -117,13 +140,9 @@ export function Timeline({ state, actions }: Props) {
 
       {/* footer: zoom */}
       <div style={{ flex: "none", height: 34, display: "flex", alignItems: "center", padding: "0 12px", gap: 8, borderTop: `1px solid ${C.borderSoft}` }}>
-        <HoverBox as="button" onClick={actions.zoomOut} style={zoomBtn} hoverStyle={{ background: C.panel3, color: "#fff" }}>
-          <Icon name="zoomOut" size={15} stroke={1.9} />
-        </HoverBox>
+        <HoverBox as="button" onClick={actions.zoomOut} style={zoomBtn} hoverStyle={{ background: C.panel3, color: "#fff" }}><Icon name="zoomOut" size={15} stroke={1.9} /></HoverBox>
         <span style={{ fontSize: 11, color: C.muted2, fontFamily: MONO, width: 42, textAlign: "center" }}>{state.zoom}%</span>
-        <HoverBox as="button" onClick={actions.zoomIn} style={zoomBtn} hoverStyle={{ background: C.panel3, color: "#fff" }}>
-          <Icon name="zoomIn" size={15} stroke={1.9} />
-        </HoverBox>
+        <HoverBox as="button" onClick={actions.zoomIn} style={zoomBtn} hoverStyle={{ background: C.panel3, color: "#fff" }}><Icon name="zoomIn" size={15} stroke={1.9} /></HoverBox>
       </div>
     </div>
   );
