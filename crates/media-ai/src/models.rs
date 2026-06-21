@@ -71,18 +71,6 @@ impl hf_hub::api::Progress for FileProgress {
     }
 }
 
-/// Fetch a file from the hub (cached). No progress reporting.
-pub fn hf_file(repo: &str, file: &str, token: Option<String>) -> Result<PathBuf> {
-    use hf_hub::api::sync::ApiBuilder;
-    let api = ApiBuilder::new()
-        .with_token(token)
-        .build()
-        .context("khởi tạo hf-hub api")?;
-    api.model(repo.to_string())
-        .get(file)
-        .with_context(|| format!("tải {repo}/{file}"))
-}
-
 /// Fetch a file, reporting byte progress into `prog`. Cache-aware: an already-
 /// downloaded file is returned instantly without re-downloading.
 pub fn hf_file_with_progress(

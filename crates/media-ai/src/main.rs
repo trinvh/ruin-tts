@@ -258,6 +258,9 @@ async fn main() -> Result<()> {
         .route("/health", get(health))
         .route("/progress", get(progress_handler))
         .route("/analyze", post(analyze_handler))
+        // The desktop webview reads /health + /progress directly (onboarding) —
+        // needs CORS, like vieneu-server + studio-server.
+        .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
     axum::serve(listener, app).await?;
     Ok(())
