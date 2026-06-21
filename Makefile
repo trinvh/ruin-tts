@@ -8,6 +8,9 @@ SIDECARS := vieneu-server studio-server media-ai
 MAIN_CRATES := -p vieneu-core -p vieneu-server -p vieneu-cli -p studio -p media-ai
 
 dev: sidecars ## Run the desktop app in dev mode (UI hot-reload + Rust sidecars)
+	@# Kill any sidecars left over from a previous run (e.g. orphans from before
+	@# the die-with-parent fix) so a fresh `make dev` never clashes on ports.
+	@-pkill -f 'release/vieneu-server' 2>/dev/null; pkill -f 'release/studio-server' 2>/dev/null; pkill -f 'release/media-ai' 2>/dev/null; true
 	pnpm -C ui install
 	pnpm -C ui tauri dev
 
