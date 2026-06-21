@@ -63,9 +63,18 @@ async fn main() -> Result<()> {
     register_default(&mut registry, services.clone());
     let registry = Arc::new(registry);
 
-    tokio::spawn(run_worker(services.clone(), registry.clone()));
+    let running: studio::server::RunningMap = Arc::new(std::sync::Mutex::new(Default::default()));
+    tokio::spawn(run_worker(
+        services.clone(),
+        registry.clone(),
+        running.clone(),
+    ));
 
-    let state = AppState { services, registry };
+    let state = AppState {
+        services,
+        registry,
+        running,
+    };
     let listener = tokio::net::TcpListener::bind(&args.addr).await?;
     tracing::info!("studio-server listening on http://{}", args.addr);
     axum::serve(listener, app(state)).await?;

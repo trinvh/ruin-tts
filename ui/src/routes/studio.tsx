@@ -139,7 +139,7 @@ export function StudioPage() {
         <StatusPill status={status} info={info} />
       </div>
 
-      <div className="grid">
+      <div className="tts-grid">
         <div className="col">
           <section className="panel compose">
             <label className="field-label">Văn bản</label>

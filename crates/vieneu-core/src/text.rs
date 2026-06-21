@@ -143,98 +143,133 @@ fn split_after_punct(text: &str, punct: &[char]) -> Vec<String> {
 const SENTENCE_END: &[char] = &['.', '!', '?', '…'];
 const MINOR_PUNCT: &[char] = &[',', ';', ':', '-', '–', '—'];
 
-/// Port of `split_text_into_chunks`: split raw text into chunks ≤ `max_chars`.
-pub fn split_text_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
+/// A text chunk plus whether a paragraph boundary follows it (so the audio join
+/// can use a longer pause at paragraph ends than between sentences).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextChunk {
+    pub text: String,
+    pub paragraph_end: bool,
+}
+
+/// Pack one paragraph's sentences into chunks ≤ `max_chars` (whole sentences;
+/// over-long sentences fall back to minor punctuation, then words).
+fn chunk_paragraph(para: &str, max_chars: usize) -> Vec<String> {
+    let mut final_chunks: Vec<String> = Vec::new();
+    let sentences = split_after_punct(para, SENTENCE_END);
+    let mut buffer = String::new();
+
+    for sentence in sentences {
+        let sentence = sentence.trim();
+        if sentence.is_empty() {
+            continue;
+        }
+        if sentence.chars().count() > max_chars {
+            if !buffer.is_empty() {
+                final_chunks.push(std::mem::take(&mut buffer));
+            }
+            for part in split_after_punct(sentence, MINOR_PUNCT) {
+                let part = part.trim();
+                if part.is_empty() {
+                    continue;
+                }
+                if buffer.chars().count() + 1 + part.chars().count() <= max_chars {
+                    if buffer.is_empty() {
+                        buffer = part.to_string();
+                    } else {
+                        buffer.push(' ');
+                        buffer.push_str(part);
+                    }
+                } else {
+                    if !buffer.is_empty() {
+                        final_chunks.push(std::mem::take(&mut buffer));
+                    }
+                    buffer = part.to_string();
+                    if buffer.chars().count() > max_chars {
+                        // word-level fallback
+                        let mut current = String::new();
+                        for word in buffer.split_whitespace() {
+                            if !current.is_empty()
+                                && current.chars().count() + 1 + word.chars().count() > max_chars
+                            {
+                                final_chunks.push(std::mem::take(&mut current));
+                                current = word.to_string();
+                            } else if current.is_empty() {
+                                current = word.to_string();
+                            } else {
+                                current.push(' ');
+                                current.push_str(word);
+                            }
+                        }
+                        buffer = current;
+                    }
+                }
+            }
+        } else if !buffer.is_empty()
+            && buffer.chars().count() + 1 + sentence.chars().count() > max_chars
+        {
+            final_chunks.push(std::mem::replace(&mut buffer, sentence.to_string()));
+        } else if buffer.is_empty() {
+            buffer = sentence.to_string();
+        } else {
+            buffer.push(' ');
+            buffer.push_str(sentence);
+        }
+    }
+    if !buffer.is_empty() {
+        final_chunks.push(buffer);
+    }
+    final_chunks
+}
+
+/// Split raw text into chunks ≤ `max_chars`, tagging the last chunk of each
+/// paragraph so the join can pause longer there.
+pub fn split_text_into_segments(text: &str, max_chars: usize) -> Vec<TextChunk> {
     if text.trim().is_empty() {
         return Vec::new();
     }
-    let mut final_chunks: Vec<String> = Vec::new();
-
+    let mut segments: Vec<TextChunk> = Vec::new();
     for para in text.trim().split(|c| c == '\n' || c == '\r') {
         let para = para.trim();
         if para.is_empty() {
             continue;
         }
-        let sentences = split_after_punct(para, SENTENCE_END);
-        let mut buffer = String::new();
-
-        for sentence in sentences {
-            let sentence = sentence.trim();
-            if sentence.is_empty() {
-                continue;
-            }
-            if sentence.chars().count() > max_chars {
-                if !buffer.is_empty() {
-                    final_chunks.push(std::mem::take(&mut buffer));
-                }
-                for part in split_after_punct(sentence, MINOR_PUNCT) {
-                    let part = part.trim();
-                    if part.is_empty() {
-                        continue;
-                    }
-                    if buffer.chars().count() + 1 + part.chars().count() <= max_chars {
-                        if buffer.is_empty() {
-                            buffer = part.to_string();
-                        } else {
-                            buffer.push(' ');
-                            buffer.push_str(part);
-                        }
-                    } else {
-                        if !buffer.is_empty() {
-                            final_chunks.push(std::mem::take(&mut buffer));
-                        }
-                        buffer = part.to_string();
-                        if buffer.chars().count() > max_chars {
-                            // word-level fallback
-                            let mut current = String::new();
-                            for word in buffer.split_whitespace() {
-                                if !current.is_empty()
-                                    && current.chars().count() + 1 + word.chars().count()
-                                        > max_chars
-                                {
-                                    final_chunks.push(std::mem::take(&mut current));
-                                    current = word.to_string();
-                                } else if current.is_empty() {
-                                    current = word.to_string();
-                                } else {
-                                    current.push(' ');
-                                    current.push_str(word);
-                                }
-                            }
-                            buffer = current;
-                        }
-                    }
-                }
-            } else if !buffer.is_empty()
-                && buffer.chars().count() + 1 + sentence.chars().count() > max_chars
-            {
-                final_chunks.push(std::mem::replace(&mut buffer, sentence.to_string()));
-            } else if buffer.is_empty() {
-                buffer = sentence.to_string();
-            } else {
-                buffer.push(' ');
-                buffer.push_str(sentence);
+        let before = segments.len();
+        for chunk in chunk_paragraph(para, max_chars) {
+            let chunk = chunk.trim().to_string();
+            if !chunk.is_empty() {
+                segments.push(TextChunk {
+                    text: chunk,
+                    paragraph_end: false,
+                });
             }
         }
-        if !buffer.is_empty() {
-            final_chunks.push(buffer);
+        // Mark the final chunk of this paragraph as a paragraph boundary.
+        if segments.len() > before {
+            if let Some(last) = segments.last_mut() {
+                last.paragraph_end = true;
+            }
         }
     }
+    segments
+}
 
-    final_chunks
+/// Backward-compatible: chunk texts only (drops paragraph metadata).
+pub fn split_text_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
+    split_text_into_segments(text, max_chars)
         .into_iter()
-        .map(|c| c.trim().to_string())
-        .filter(|c| !c.is_empty())
+        .map(|c| c.text)
         .collect()
 }
 
 // ── Audio join (join_audio_chunks) ────────────────────────────────────────
 
-/// Concatenate chunk waveforms with optional silence or crossfade between them.
-pub fn join_audio_chunks(
+/// Concatenate chunk waveforms with a per-boundary silence (seconds). `gaps_p`
+/// has one entry per boundary (`chunks.len() - 1`); a boundary with gap 0 falls
+/// back to a crossfade of `crossfade_p`.
+pub fn join_audio_chunks_with_gaps(
     chunks: &[Vec<f32>],
     sample_rate: u32,
-    silence_p: f32,
+    gaps_p: &[f32],
     crossfade_p: f32,
 ) -> Vec<f32> {
     if chunks.is_empty() {
@@ -243,11 +278,12 @@ pub fn join_audio_chunks(
     if chunks.len() == 1 {
         return chunks[0].clone();
     }
-    let silence_samples = (sample_rate as f32 * silence_p) as usize;
     let crossfade_samples = (sample_rate as f32 * crossfade_p) as usize;
     let mut out = chunks[0].clone();
 
-    for next in &chunks[1..] {
+    for (i, next) in chunks[1..].iter().enumerate() {
+        let gap_p = gaps_p.get(i).copied().unwrap_or(0.0);
+        let silence_samples = (sample_rate as f32 * gap_p).max(0.0) as usize;
         if silence_samples > 0 {
             out.extend(std::iter::repeat(0.0f32).take(silence_samples));
             out.extend_from_slice(next);
@@ -269,6 +305,17 @@ pub fn join_audio_chunks(
         }
     }
     out
+}
+
+/// Concatenate chunk waveforms with a uniform silence (or crossfade) between all.
+pub fn join_audio_chunks(
+    chunks: &[Vec<f32>],
+    sample_rate: u32,
+    silence_p: f32,
+    crossfade_p: f32,
+) -> Vec<f32> {
+    let gaps = vec![silence_p; chunks.len().saturating_sub(1)];
+    join_audio_chunks_with_gaps(chunks, sample_rate, &gaps, crossfade_p)
 }
 
 #[cfg(test)]
@@ -294,5 +341,30 @@ mod tests {
         let b = vec![2.0f32; 10];
         let out = join_audio_chunks(&[a, b], 100, 0.1, 0.0);
         assert_eq!(out.len(), 10 + 10 + 10); // 0.1s * 100 = 10 silence
+    }
+
+    #[test]
+    fn segments_mark_paragraph_boundaries() {
+        // Two paragraphs, each fits one chunk → both flagged paragraph_end.
+        let segs = split_text_into_segments("Câu một. Câu hai.\nĐoạn hai ở đây.", 256);
+        assert_eq!(segs.len(), 2);
+        assert!(segs[0].paragraph_end);
+        assert!(segs[1].paragraph_end);
+
+        // One paragraph split into several chunks → only the last is a boundary.
+        let segs2 = split_text_into_segments("Câu một. Câu hai! Câu ba? Câu bốn.", 12);
+        assert!(segs2.len() >= 2);
+        assert!(!segs2[0].paragraph_end);
+        assert!(segs2.last().unwrap().paragraph_end);
+    }
+
+    #[test]
+    fn join_with_gaps_uses_per_boundary_silence() {
+        let a = vec![1.0f32; 10];
+        let b = vec![2.0f32; 10];
+        let c = vec![3.0f32; 10];
+        // gap 0.1s (10 samples) then 0.3s (30 samples) at 100 Hz
+        let out = join_audio_chunks_with_gaps(&[a, b, c], 100, &[0.1, 0.3], 0.0);
+        assert_eq!(out.len(), 10 + 10 + 10 + 30 + 10);
     }
 }

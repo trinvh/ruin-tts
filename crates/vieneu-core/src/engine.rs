@@ -96,7 +96,10 @@ pub struct InferOptions {
     pub sampling: SamplingParams,
     pub max_new_frames: usize,
     pub max_chars: usize,
+    /// Silence (seconds) between segments within a paragraph.
     pub silence_p: f32,
+    /// Silence (seconds) at paragraph boundaries (≥ silence_p for storytelling).
+    pub paragraph_silence_p: f32,
     pub crossfade_p: f32,
 }
 
@@ -109,6 +112,7 @@ impl Default for InferOptions {
             max_new_frames: 300,
             max_chars: 256,
             silence_p: 0.15,
+            paragraph_silence_p: 0.15,
             crossfade_p: 0.0,
         }
     }
@@ -204,17 +208,17 @@ impl Engine {
     ) -> Result<Vec<f32>> {
         let (ref_codes, voice_token_id) = self.resolve_voice(&opts.voice)?;
 
-        let chunks = text::split_text_into_chunks(text, opts.max_chars);
-        if chunks.is_empty() {
+        let segments = text::split_text_into_segments(text, opts.max_chars);
+        if segments.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut wavs: Vec<Vec<f32>> = Vec::with_capacity(chunks.len());
-        for chunk in &chunks {
+        let mut wavs: Vec<Vec<f32>> = Vec::with_capacity(segments.len());
+        for seg in &segments {
             if cancel.load(Ordering::Relaxed) {
                 return Err(Cancelled.into());
             }
-            let phonemes = text::phonemize_with_emotions(&self.pipe, chunk);
+            let phonemes = text::phonemize_with_emotions(&self.pipe, &seg.text);
             let wav = self.infer_phonemes(
                 &phonemes,
                 ref_codes.as_ref(),
@@ -226,10 +230,21 @@ impl Engine {
             )?;
             wavs.push(wav);
         }
-        Ok(text::join_audio_chunks(
+        // Longer pause at paragraph boundaries than between sentences.
+        let gaps: Vec<f32> = segments
+            .windows(2)
+            .map(|w| {
+                if w[0].paragraph_end {
+                    opts.paragraph_silence_p
+                } else {
+                    opts.silence_p
+                }
+            })
+            .collect();
+        Ok(text::join_audio_chunks_with_gaps(
             &wavs,
             self.sample_rate,
-            opts.silence_p,
+            &gaps,
             opts.crossfade_p,
         ))
     }

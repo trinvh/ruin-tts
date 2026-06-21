@@ -15,6 +15,7 @@ import {
   createRun,
   deleteWorkflow,
   getDefaultGraph,
+  getLoopGraph,
   getNodeSpecs,
   getRun,
   getWorkflow,
@@ -27,7 +28,17 @@ import {
 } from "../studioApi";
 import { Inspector } from "../components/flow/Inspector";
 import { RunDetailView } from "../components/flow/RunDetail";
-import { defaultsFromSpec, newId, nodeLabel, nodeStyle, toGraph } from "../components/flow/nodes";
+import { BlockNode } from "../components/flow/BlockNode";
+import {
+  defaultsFromSpec,
+  newId,
+  nodeLabel,
+  nodeStyle,
+  nodeValidity,
+  toGraph,
+} from "../components/flow/nodes";
+
+const NODE_TYPES = { block: BlockNode };
 
 export function FlowsEditor() {
   return (
@@ -48,7 +59,11 @@ function EditorInner() {
   const [status, setStatus] = useState("");
   const [drawer, setDrawer] = useState(false);
   const [activeRun, setActiveRun] = useState<string | null>(null);
+  const [runStatus, setRunStatus] = useState<Record<string, RunStep["status"]>>({});
   const wrap = useRef<HTMLDivElement>(null);
+  // WKWebView (Tauri) drops custom dataTransfer MIME types, so the dragged node
+  // type is carried in a ref instead of relying on dataTransfer alone.
+  const dragType = useRef<string | null>(null);
   const rf = useReactFlow();
 
   const applyGraph = useCallback(
@@ -59,11 +74,19 @@ function EditorInner() {
           id: n.id,
           position: n.position ?? { x: 80 + i * 240, y: 120 },
           data: { nodeType: n.type, config: n.config ?? {} },
-          type: "default",
+          type: "block",
           style: nodeStyle(false),
         })),
       );
-      setEdges(g.edges.map((e, i) => ({ id: `e${i}`, source: e.from, target: e.to, animated: true })));
+      setEdges(
+        g.edges.map((e, i) => ({
+          id: `e${i}`,
+          source: e.from,
+          target: e.to,
+          sourceHandle: e.handle ?? null,
+          animated: true,
+        })),
+      );
     },
     [setNodes, setEdges],
   );
@@ -77,10 +100,14 @@ function EditorInner() {
           const s = await getNodeSpecs();
           if (!alive) return;
           setSpecs(s);
-          if (id === "new") {
-            const tpl = await getDefaultGraph();
+          if (id === "new" || id === "new-loop") {
+            const tpl = id === "new-loop" ? await getLoopGraph() : await getDefaultGraph();
             if (!alive) return;
-            applyGraph({ ...tpl, id: `wf-${Date.now().toString(36)}`, name: "Pipeline mới" });
+            applyGraph({
+              ...tpl,
+              id: `wf-${Date.now().toString(36)}`,
+              name: id === "new-loop" ? "Pipeline có vòng lặp" : "Pipeline mới",
+            });
           } else {
             const g = await getWorkflow(id);
             if (!alive) return;
@@ -107,7 +134,8 @@ function EditorInner() {
   const onDrop = useCallback(
     (ev: React.DragEvent) => {
       ev.preventDefault();
-      const type = ev.dataTransfer.getData("application/node-type");
+      const type = dragType.current || ev.dataTransfer.getData("text/plain");
+      dragType.current = null;
       if (!type || !wrap.current) return;
       const b = wrap.current.getBoundingClientRect();
       const position = rf.project({ x: ev.clientX - b.left, y: ev.clientY - b.top });
@@ -117,7 +145,28 @@ function EditorInner() {
           id: nid,
           position,
           data: { nodeType: type, config: defaultsFromSpec(specByType[type]) },
-          type: "default",
+          type: "block",
+          style: nodeStyle(false),
+        }),
+      );
+    },
+    [rf, setNodes, specByType],
+  );
+
+  // Fallback: clicking a palette block also adds it (DnD can be flaky in some
+  // webviews). Drops it near the canvas centre.
+  const addNode = useCallback(
+    (type: string) => {
+      const b = wrap.current?.getBoundingClientRect();
+      const position = b
+        ? rf.project({ x: b.width / 2, y: b.height / 2 })
+        : { x: 160, y: 120 };
+      setNodes((ns) =>
+        ns.concat({
+          id: newId(type),
+          position,
+          data: { nodeType: type, config: defaultsFromSpec(specByType[type]) },
+          type: "block",
           style: nodeStyle(false),
         }),
       );
@@ -166,17 +215,35 @@ function EditorInner() {
     [graph],
   );
 
-  const decorate = useCallback(
-    (steps: RunStep[]) => {
-      const byId: Record<string, RunStep["status"]> = {};
-      for (const s of steps) byId[s.node_id] = s.status;
-      setNodes((ns) => ns.map((n) => ({ ...n, style: nodeStyle(n.id === selected, byId[n.id]) })));
-    },
-    [selected, setNodes],
-  );
+  const onRunSteps = useCallback((steps: RunStep[]) => {
+    setRunStatus(Object.fromEntries(steps.map((s) => [s.node_id, s.status])));
+  }, []);
 
   const selNode = nodes.find((n) => n.id === selected);
   const selSpec = selNode ? specByType[(selNode.data as any).nodeType] : undefined;
+
+  // Styled view of nodes: border reflects run status, else config validity.
+  const styledNodes = useMemo(
+    () =>
+      nodes.map((n) => {
+        const t = (n.data as any).nodeType as string;
+        const cfg = (n.data as any).config as Record<string, unknown>;
+        return {
+          ...n,
+          data: { ...n.data, label: nodeLabel(specByType, n), handles: specByType[t]?.handles ?? [] },
+          style: nodeStyle(n.id === selected, runStatus[n.id], nodeValidity(t, cfg, specByType)),
+        };
+      }),
+    [nodes, selected, runStatus, specByType],
+  );
+
+  const invalidCount = useMemo(
+    () =>
+      nodes.filter(
+        (n) => nodeValidity((n.data as any).nodeType, (n.data as any).config, specByType) !== "ok",
+      ).length,
+    [nodes, specByType],
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -214,52 +281,98 @@ function EditorInner() {
           ＋ Thêm vào hàng đợi
         </button>
       </div>
-      {status && <div className="px-1 py-1.5 text-xs text-muted">{status}</div>}
+      {(status || invalidCount > 0) && (
+        <div className="flex items-center gap-3 px-1 py-1.5 text-xs">
+          {status && <span className="text-muted">{status}</span>}
+          {invalidCount > 0 && (
+            <span className="text-[#d29922]">
+              ⚠ {invalidCount} khối cần cấu hình hoặc không còn hỗ trợ — sửa trước khi chạy.
+            </span>
+          )}
+        </div>
+      )}
 
-      {/* Body: palette · canvas · inspector */}
-      <div className="grid min-h-[28rem] flex-1 grid-cols-[12rem_1fr_18rem] gap-0 overflow-hidden">
+      {/* Body: palette · canvas · (inspector only when a node is selected) */}
+      <div
+        className="grid min-h-0 flex-1 overflow-hidden"
+        style={{ gridTemplateColumns: selNode && selSpec ? "10rem 1fr 19rem" : "10rem 1fr" }}
+      >
         <aside className="overflow-y-auto border-r border-border p-2">
-          <div className="px-1 pb-2 text-xs font-semibold uppercase tracking-wide text-muted">Khối</div>
+          <div className="px-1 pb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">Khối</div>
           {specs.map((s) => (
             <div
               key={s.type}
-              className="mb-1.5 cursor-grab rounded-lg border border-border bg-surface-2 px-2.5 py-2 text-sm text-ink transition hover:border-brand active:cursor-grabbing"
+              className="mb-1.5 flex cursor-grab select-none items-center justify-between gap-1 rounded-lg border border-border bg-surface-2 px-2 py-1.5 text-[13px] leading-tight text-ink transition hover:border-brand hover:bg-surface active:cursor-grabbing"
               draggable
-              onDragStart={(e) => e.dataTransfer.setData("application/node-type", s.type)}
-              title={s.desc ?? "Kéo vào canvas"}
+              onDragStart={(e) => {
+                dragType.current = s.type;
+                e.dataTransfer.setData("text/plain", s.type);
+                e.dataTransfer.effectAllowed = "copy";
+              }}
+              onDragEnd={() => {
+                dragType.current = null;
+              }}
+              onDoubleClick={() => addNode(s.type)}
+              title={s.desc ? `${s.desc}\n(kéo vào canvas hoặc nhấn +)` : "Kéo vào canvas hoặc nhấn +"}
             >
-              {s.label}
-              {s.desc && <div className="mt-0.5 text-[11px] leading-snug text-muted">{s.desc}</div>}
+              <span className="truncate">{s.label}</span>
+              <button
+                className="shrink-0 rounded px-1.5 text-base leading-none text-muted hover:text-ink"
+                title="Thêm vào canvas"
+                onClick={() => addNode(s.type)}
+              >
+                ＋
+              </button>
             </div>
           ))}
+
+          <div className="mt-3 space-y-1 border-t border-border pt-2 text-[10px] text-muted">
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block h-2.5 w-2.5 rounded border-2 border-[#d29922]" />
+              Cần cấu hình
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block h-2.5 w-2.5 rounded border-2 border-dashed border-[#f85149]" />
+              Khối lỗi / không còn hỗ trợ
+            </div>
+          </div>
         </aside>
 
         <div
-          className="relative bg-canvas"
+          className="relative h-full bg-canvas"
           ref={wrap}
           onDrop={onDrop}
           onDragOver={(e) => {
             e.preventDefault();
-            e.dataTransfer.dropEffect = "move";
+            e.dataTransfer.dropEffect = "copy";
           }}
         >
           <ReactFlow
-            nodes={nodes.map((n) => ({ ...n, data: { ...n.data, label: nodeLabel(specByType, n) } }))}
+            nodes={styledNodes}
             edges={edges}
+            nodeTypes={NODE_TYPES}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onNodeClick={(_, n) => setSelected(n.id)}
             onPaneClick={() => setSelected(null)}
+            proOptions={{ hideAttribution: true }}
             fitView
           >
             <Background color="#30363d" />
             <Controls />
           </ReactFlow>
+          {nodes.length === 0 && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <p className="rounded-lg border border-dashed border-border px-4 py-3 text-sm text-muted">
+                Kéo khối từ trái vào đây để bắt đầu.
+              </p>
+            </div>
+          )}
         </div>
 
-        <aside className="overflow-y-auto border-l border-border p-3">
-          {selNode && selSpec ? (
+        {selNode && selSpec && (
+          <aside className="overflow-y-auto border-l border-border p-3">
             <Inspector
               node={selNode}
               spec={selSpec}
@@ -270,17 +383,15 @@ function EditorInner() {
                 setSelected(null);
               }}
             />
-          ) : (
-            <p className="muted small">Chọn một khối để cấu hình, hoặc kéo khối từ trái vào canvas.</p>
-          )}
-        </aside>
+          </aside>
+        )}
       </div>
 
       {drawer && (
         <RunDrawer
           activeRun={activeRun}
           setActiveRun={setActiveRun}
-          onSteps={decorate}
+          onSteps={onRunSteps}
           onClose={() => setDrawer(false)}
         />
       )}

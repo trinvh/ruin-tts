@@ -62,13 +62,22 @@ export function FlowsHome() {
       )}
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {/* Create-new tile */}
+        {/* Create-new tiles */}
         <button
           onClick={() => navigate({ to: "/flows/$id", params: { id: "new" } })}
           className="flex min-h-[8rem] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-surface/40 text-muted transition hover:border-brand hover:text-ink"
         >
           <span className="text-3xl leading-none">＋</span>
           <span className="text-sm">Pipeline mới</span>
+          <span className="text-[11px] text-muted">5 khối tuyến tính</span>
+        </button>
+        <button
+          onClick={() => navigate({ to: "/flows/$id", params: { id: "new-loop" } })}
+          className="flex min-h-[8rem] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-surface/40 text-muted transition hover:border-brand hover:text-ink"
+        >
+          <span className="text-3xl leading-none">↻</span>
+          <span className="text-sm">Pipeline có vòng lặp</span>
+          <span className="text-[11px] text-muted">xử lý từng chunk riêng</span>
         </button>
 
         {workflows?.map((w) => (

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use futures::future::{BoxFuture, FutureExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -29,6 +30,10 @@ pub struct Position {
 pub struct EdgeDef {
     pub from: String,
     pub to: String,
+    /// Source port the edge leaves from. Empty/None = the node's default output.
+    /// `If` uses "then"/"else"; `Loop` uses "body"/"done".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,12 +117,15 @@ fn summarize_value(v: &Value) -> Value {
     }
 }
 
-/// Observes a run node-by-node (used to persist live progress + I/O).
+/// Observes a run step-by-step (used to persist live progress + I/O). `step_id`
+/// is the node id for normal steps, or `node_id#<iter>` for loop-body steps, so
+/// each loop iteration is its own retriable/visible step.
 #[async_trait]
 pub trait RunObserver: Send + Sync {
-    async fn on_start(&self, node: &NodeDef, input: &Value);
+    async fn on_start(&self, step_id: &str, node: &NodeDef, seq: usize, input: &Value);
     async fn on_finish(
         &self,
+        step_id: &str,
         node: &NodeDef,
         output: &Value,
         ctx_state: &Value,
@@ -125,39 +133,367 @@ pub trait RunObserver: Send + Sync {
     );
 }
 
-/// Like [`execute_workflow`] but reports per-node start/finish with the node's
-/// config (input) and a snapshot of what it produced (output + logs).
+/// Branching executor: walks the graph following edge handles, evaluating `If`
+/// (then/else) and expanding `Loop` (one body pass per array item). Normal nodes
+/// run via the registry. Supports the structured shapes the editor produces
+/// (linear backbone + If diamonds + Loop blocks).
 pub async fn execute_workflow_observed(
     wf: &WorkflowDef,
     registry: &Registry,
     ctx: &mut RunContext,
     observer: &dyn RunObserver,
 ) -> Result<()> {
-    for node in topo_sort(wf)? {
-        let handler = registry
-            .get(&node.node_type)
-            .ok_or_else(|| anyhow!("no handler registered for node type \"{}\"", node.node_type))?;
-        observer.on_start(&node, &node.config).await;
-        let log_start = ctx.logs.len();
-        let res = handler.run(&node, ctx).await;
-        let new_logs: Vec<Value> = ctx.logs[log_start..]
-            .iter()
-            .cloned()
-            .map(Value::String)
-            .collect();
-        let output = serde_json::json!({ "logs": new_logs, "state": ctx.data_summary() });
-        let ctx_state = ctx.data_full();
-        observer
-            .on_finish(
-                &node,
-                &output,
-                &ctx_state,
-                res.as_ref().err().map(|e| format!("{e:#}")).as_deref(),
-            )
-            .await;
-        res?;
+    // Owned adjacency keyed by (from, handle) so recursion is lifetime-simple.
+    let nodes: HashMap<String, NodeDef> =
+        wf.nodes.iter().map(|n| (n.id.clone(), n.clone())).collect();
+    let mut out: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let mut indeg: HashMap<&str, usize> = nodes.keys().map(|k| (k.as_str(), 0)).collect();
+    for e in &wf.edges {
+        let h = e.handle.clone().unwrap_or_default();
+        out.entry((e.from.clone(), h))
+            .or_default()
+            .push(e.to.clone());
+        *indeg.entry(e.to.as_str()).or_default() += 1;
+    }
+    let starts: Vec<String> = wf
+        .nodes
+        .iter()
+        .filter(|n| indeg.get(n.id.as_str()).copied().unwrap_or(0) == 0)
+        .map(|n| n.id.clone())
+        .collect();
+
+    let mut executed: std::collections::HashSet<String> = Default::default();
+    let seq = std::sync::atomic::AtomicUsize::new(0);
+    for s in starts {
+        walk(
+            s,
+            String::new(),
+            None,
+            ctx,
+            &nodes,
+            &out,
+            registry,
+            observer,
+            &mut executed,
+            &seq,
+        )
+        .await?;
     }
     Ok(())
+}
+
+/// Build node + (from, handle)→targets adjacency maps from a graph.
+fn build_maps(
+    wf: &WorkflowDef,
+) -> (
+    HashMap<String, NodeDef>,
+    HashMap<(String, String), Vec<String>>,
+) {
+    let nodes = wf.nodes.iter().map(|n| (n.id.clone(), n.clone())).collect();
+    let mut out: HashMap<(String, String), Vec<String>> = HashMap::new();
+    for e in &wf.edges {
+        let h = e.handle.clone().unwrap_or_default();
+        out.entry((e.from.clone(), h))
+            .or_default()
+            .push(e.to.clone());
+    }
+    (nodes, out)
+}
+
+/// Resume execution starting at a specific node, with a step-id suffix and an
+/// optional enclosing-loop id (used to retry a single loop iteration's body).
+pub async fn execute_from(
+    wf: &WorkflowDef,
+    registry: &Registry,
+    ctx: &mut RunContext,
+    observer: &dyn RunObserver,
+    start: &str,
+    suffix: &str,
+    loop_stop: Option<String>,
+) -> Result<()> {
+    let (nodes, out) = build_maps(wf);
+    let mut executed: std::collections::HashSet<String> = Default::default();
+    let seq = std::sync::atomic::AtomicUsize::new(0);
+    walk(
+        start.to_string(),
+        suffix.to_string(),
+        loop_stop,
+        ctx,
+        &nodes,
+        &out,
+        registry,
+        observer,
+        &mut executed,
+        &seq,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk<'a>(
+    node_id: String,
+    suffix: String,
+    loop_stop: Option<String>,
+    ctx: &'a mut RunContext,
+    nodes: &'a HashMap<String, NodeDef>,
+    out: &'a HashMap<(String, String), Vec<String>>,
+    registry: &'a Registry,
+    observer: &'a dyn RunObserver,
+    executed: &'a mut std::collections::HashSet<String>,
+    seq: &'a std::sync::atomic::AtomicUsize,
+) -> BoxFuture<'a, Result<()>> {
+    use std::sync::atomic::Ordering::Relaxed;
+    async move {
+        let step_id = format!("{node_id}{suffix}");
+        if executed.contains(&step_id) {
+            return Ok(());
+        }
+        let node = nodes
+            .get(&node_id)
+            .ok_or_else(|| anyhow!("edge points to unknown node \"{node_id}\""))?;
+
+        match node.node_type.as_str() {
+            "Loop" => {
+                observer
+                    .on_start(&step_id, node, seq.fetch_add(1, Relaxed), &node.config)
+                    .await;
+                let over = node
+                    .config
+                    .get("over")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("videos")
+                    .to_string();
+                let items: Vec<Value> = ctx
+                    .get(&over)
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                ctx.log(format!("Lặp {} mục từ '{}'", items.len(), over));
+                // Preserve any enclosing loop's index so nested loops restore it.
+                let prior_index = ctx.get("__loop_index").cloned();
+                let body = out
+                    .get(&(node_id.clone(), "body".to_string()))
+                    .cloned()
+                    .unwrap_or_default();
+                let mut results: Vec<Value> = Vec::with_capacity(items.len());
+                let mut loop_err: Option<anyhow::Error> = None;
+                for (i, item) in items.into_iter().enumerate() {
+                    ctx.set(&over, Value::Array(vec![item.clone()]));
+                    ctx.set("__loop_index", serde_json::json!(i));
+                    let isuf = format!("{suffix}#{}", i + 1);
+                    for b in &body {
+                        if let Err(e) = walk(
+                            b.clone(),
+                            isuf.clone(),
+                            Some(node_id.clone()),
+                            ctx,
+                            nodes,
+                            out,
+                            registry,
+                            observer,
+                            executed,
+                            seq,
+                        )
+                        .await
+                        {
+                            loop_err = Some(e);
+                            break;
+                        }
+                    }
+                    let collected = ctx
+                        .get(&over)
+                        .and_then(|v| v.as_array())
+                        .and_then(|a| a.first())
+                        .cloned()
+                        .unwrap_or(item);
+                    results.push(collected);
+                    if loop_err.is_some() {
+                        break;
+                    }
+                }
+                ctx.set(&over, Value::Array(results));
+                // Restore the enclosing index so post-loop nodes don't see a stale one.
+                ctx.set("__loop_index", prior_index.unwrap_or(Value::Null));
+                let ctx_state = ctx.data_full();
+                let output = serde_json::json!({ "logs": [], "state": ctx.data_summary() });
+                executed.insert(step_id.clone());
+                observer
+                    .on_finish(
+                        &step_id,
+                        node,
+                        &output,
+                        &ctx_state,
+                        loop_err.as_ref().map(|e| format!("{e:#}")).as_deref(),
+                    )
+                    .await;
+                if let Some(e) = loop_err {
+                    return Err(e);
+                }
+                follow(
+                    out, &node_id, "done", &suffix, &loop_stop, ctx, nodes, registry, observer,
+                    executed, seq,
+                )
+                .await
+            }
+            "If" => {
+                observer
+                    .on_start(&step_id, node, seq.fetch_add(1, Relaxed), &node.config)
+                    .await;
+                let taken = eval_condition(&node.config, ctx);
+                ctx.log(format!("Điều kiện → nhánh '{taken}'"));
+                let ctx_state = ctx.data_full();
+                let output =
+                    serde_json::json!({ "logs": [], "state": ctx.data_summary(), "branch": taken });
+                executed.insert(step_id.clone());
+                observer
+                    .on_finish(&step_id, node, &output, &ctx_state, None)
+                    .await;
+                follow(
+                    out, &node_id, &taken, &suffix, &loop_stop, ctx, nodes, registry, observer,
+                    executed, seq,
+                )
+                .await
+            }
+            _ => {
+                let handler = registry.get(&node.node_type).ok_or_else(|| {
+                    anyhow!("no handler registered for node type \"{}\"", node.node_type)
+                })?;
+                observer
+                    .on_start(&step_id, node, seq.fetch_add(1, Relaxed), &node.config)
+                    .await;
+                let log_start = ctx.logs.len();
+                let res = handler.run(node, ctx).await;
+                let new_logs: Vec<Value> = ctx.logs[log_start..]
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect();
+                let output = serde_json::json!({ "logs": new_logs, "state": ctx.data_summary() });
+                let ctx_state = ctx.data_full();
+                executed.insert(step_id.clone());
+                observer
+                    .on_finish(
+                        &step_id,
+                        node,
+                        &output,
+                        &ctx_state,
+                        res.as_ref().err().map(|e| format!("{e:#}")).as_deref(),
+                    )
+                    .await;
+                res?;
+                follow(
+                    out, &node_id, "", &suffix, &loop_stop, ctx, nodes, registry, observer,
+                    executed, seq,
+                )
+                .await
+            }
+        }
+    }
+    .boxed()
+}
+
+/// Follow the successors of `node_id` on `handle`, skipping a back-edge to the
+/// enclosing loop (which signals end-of-body, not a node to run).
+#[allow(clippy::too_many_arguments)]
+fn follow<'a>(
+    out: &'a HashMap<(String, String), Vec<String>>,
+    node_id: &'a str,
+    handle: &'a str,
+    suffix: &'a str,
+    loop_stop: &'a Option<String>,
+    ctx: &'a mut RunContext,
+    nodes: &'a HashMap<String, NodeDef>,
+    registry: &'a Registry,
+    observer: &'a dyn RunObserver,
+    executed: &'a mut std::collections::HashSet<String>,
+    seq: &'a std::sync::atomic::AtomicUsize,
+) -> BoxFuture<'a, Result<()>> {
+    async move {
+        let targets = out
+            .get(&(node_id.to_string(), handle.to_string()))
+            .cloned()
+            .unwrap_or_default();
+        for t in targets {
+            if loop_stop.as_deref() == Some(t.as_str()) {
+                continue; // back-edge to the loop header → end of this body pass
+            }
+            walk(
+                t,
+                suffix.to_string(),
+                loop_stop.clone(),
+                ctx,
+                nodes,
+                out,
+                registry,
+                observer,
+                executed,
+                seq,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+    .boxed()
+}
+
+/// Evaluate an `If` node's condition against the context, returning "then"/"else".
+fn eval_condition(cfg: &Value, ctx: &RunContext) -> String {
+    let key = cfg.get("key").and_then(|v| v.as_str()).unwrap_or("");
+    let op = cfg.get("op").and_then(|v| v.as_str()).unwrap_or("nonempty");
+    let val = ctx.get(key);
+    let truthy = match op {
+        "nonempty" => match val {
+            Some(Value::Array(a)) => !a.is_empty(),
+            Some(Value::String(s)) => !s.is_empty(),
+            Some(Value::Null) | None => false,
+            Some(_) => true,
+        },
+        "empty" => match val {
+            Some(Value::Array(a)) => a.is_empty(),
+            Some(Value::String(s)) => s.is_empty(),
+            Some(Value::Null) | None => true,
+            Some(_) => false,
+        },
+        "truthy" => match val {
+            Some(Value::Bool(b)) => *b,
+            Some(Value::Number(n)) => n.as_f64().unwrap_or(0.0) != 0.0,
+            Some(Value::String(s)) => !s.is_empty(),
+            _ => false,
+        },
+        "eq" | "ne" | "gt" | "lt" => {
+            let rhs = cfg.get("value");
+            let ord = compare_json(val, rhs);
+            match (op, ord) {
+                ("eq", Some(o)) => o == std::cmp::Ordering::Equal,
+                ("ne", Some(o)) => o != std::cmp::Ordering::Equal,
+                ("ne", None) => true,
+                ("gt", Some(o)) => o == std::cmp::Ordering::Greater,
+                ("lt", Some(o)) => o == std::cmp::Ordering::Less,
+                _ => false,
+            }
+        }
+        _ => true,
+    };
+    if truthy {
+        "then".into()
+    } else {
+        "else".into()
+    }
+}
+
+fn compare_json(a: Option<&Value>, b: Option<&Value>) -> Option<std::cmp::Ordering> {
+    let (a, b) = (a?, b?);
+    if let (Some(x), Some(y)) = (json_num(a), json_num(b)) {
+        return x.partial_cmp(&y);
+    }
+    Some(a.to_string().cmp(&b.to_string()))
+}
+fn json_num(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
 }
 
 #[async_trait]
@@ -274,6 +610,7 @@ mod tests {
                 .map(|(f, t)| EdgeDef {
                     from: f.to_string(),
                     to: t.to_string(),
+                    handle: None,
                 })
                 .collect(),
         }
@@ -353,5 +690,144 @@ mod tests {
             .await
             .unwrap_err();
         assert!(e.to_string().contains("no handler"));
+    }
+
+    // ── Branching executor (If / Loop) ────────────────────────────────────────
+    struct RecObserver {
+        steps: Arc<Mutex<Vec<String>>>,
+    }
+    #[async_trait]
+    impl RunObserver for RecObserver {
+        async fn on_start(&self, step_id: &str, _n: &NodeDef, _seq: usize, _i: &Value) {
+            self.steps.lock().unwrap().push(step_id.to_string());
+        }
+        async fn on_finish(
+            &self,
+            _s: &str,
+            _n: &NodeDef,
+            _o: &Value,
+            _c: &Value,
+            _e: Option<&str>,
+        ) {
+        }
+    }
+    /// Records its run (with the loop index, if any) into a shared vec.
+    struct RecHandler {
+        t: String,
+        rec: Arc<Mutex<Vec<String>>>,
+    }
+    #[async_trait]
+    impl NodeHandler for RecHandler {
+        fn node_type(&self) -> &str {
+            &self.t
+        }
+        async fn run(&self, _node: &NodeDef, ctx: &mut RunContext) -> Result<()> {
+            let tag = match ctx.get("__loop_index").and_then(|v| v.as_u64()) {
+                Some(i) => format!("{}:{i}", self.t),
+                None => self.t.clone(),
+            };
+            self.rec.lock().unwrap().push(tag);
+            Ok(())
+        }
+    }
+
+    fn node(id: &str, t: &str, cfg: Value) -> NodeDef {
+        NodeDef {
+            id: id.into(),
+            node_type: t.into(),
+            config: cfg,
+            position: None,
+        }
+    }
+    fn edge(f: &str, t: &str, h: Option<&str>) -> EdgeDef {
+        EdgeDef {
+            from: f.into(),
+            to: t.into(),
+            handle: h.map(|s| s.into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn if_takes_then_branch_only() {
+        let rec = Arc::new(Mutex::new(Vec::new()));
+        let mut reg = Registry::new();
+        for t in ["T", "E"] {
+            reg.register(Box::new(RecHandler {
+                t: t.into(),
+                rec: rec.clone(),
+            }));
+        }
+        let g = WorkflowDef {
+            id: "w".into(),
+            name: "t".into(),
+            version: 1,
+            nodes: vec![
+                node(
+                    "a",
+                    "If",
+                    serde_json::json!({ "key": "flag", "op": "truthy" }),
+                ),
+                node("t", "T", Value::Null),
+                node("e", "E", Value::Null),
+            ],
+            edges: vec![edge("a", "t", Some("then")), edge("a", "e", Some("else"))],
+        };
+        let mut ctx = RunContext::default();
+        ctx.set("flag", Value::Bool(true));
+        let obs = RecObserver {
+            steps: Arc::new(Mutex::new(Vec::new())),
+        };
+        execute_workflow_observed(&g, &reg, &mut ctx, &obs)
+            .await
+            .unwrap();
+        assert_eq!(*rec.lock().unwrap(), vec!["T"]); // else branch skipped
+    }
+
+    #[tokio::test]
+    async fn loop_runs_body_per_item_then_done() {
+        let rec = Arc::new(Mutex::new(Vec::new()));
+        let steps = Arc::new(Mutex::new(Vec::new()));
+        let mut reg = Registry::new();
+        for t in ["START", "BODY", "DONE"] {
+            reg.register(Box::new(RecHandler {
+                t: t.into(),
+                rec: rec.clone(),
+            }));
+        }
+        let g = WorkflowDef {
+            id: "w".into(),
+            name: "t".into(),
+            version: 1,
+            nodes: vec![
+                node("s", "START", Value::Null),
+                node("l", "Loop", serde_json::json!({ "over": "videos" })),
+                node("b", "BODY", Value::Null),
+                node("d", "DONE", Value::Null),
+            ],
+            edges: vec![
+                edge("s", "l", None),
+                edge("l", "b", Some("body")),
+                edge("l", "d", Some("done")),
+            ],
+        };
+        let mut ctx = RunContext::default();
+        ctx.set("videos", serde_json::json!([10, 20]));
+        let obs = RecObserver {
+            steps: steps.clone(),
+        };
+        execute_workflow_observed(&g, &reg, &mut ctx, &obs)
+            .await
+            .unwrap();
+        // body runs once per item (with index), then done
+        assert_eq!(
+            *rec.lock().unwrap(),
+            vec!["START", "BODY:0", "BODY:1", "DONE"]
+        );
+        // each iteration is its own step id
+        let s = steps.lock().unwrap();
+        assert!(s.contains(&"b#1".to_string()));
+        assert!(s.contains(&"b#2".to_string()));
+        // the array is reassembled after the loop
+        assert_eq!(ctx.get("videos"), Some(&serde_json::json!([10, 20])));
     }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getRun, listRuns, type RunDetail, type RunSummary } from "../studioApi";
+import { clearRuns, getRun, listRuns, type RunDetail, type RunSummary } from "../studioApi";
 import { RunDetailView } from "../components/flow/RunDetail";
 
 export function RunsPage() {
@@ -39,10 +39,30 @@ export function RunsPage() {
     };
   }, [active]);
 
+  const clearHistory = async () => {
+    if (!confirm("Xoá các run đã hoàn tất (xong/lỗi/đã dừng)?")) return;
+    await clearRuns().catch((e) => alert(String(e)));
+    setDetail(null);
+    setActive(null);
+    listRuns().then(setRuns).catch(() => {});
+  };
+
   return (
     <div className="mx-auto w-full max-w-5xl">
-      <h2 className="text-2xl font-semibold text-ink">Lịch sử chạy</h2>
-      <p className="mt-1 text-sm text-muted">Hàng đợi và tiến trình theo thời gian thực của từng khối.</p>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-ink">Lịch sử chạy</h2>
+          <p className="mt-1 text-sm text-muted">
+            Hàng đợi và tiến trình theo thời gian thực của từng khối.
+          </p>
+        </div>
+        <button
+          onClick={clearHistory}
+          className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted transition hover:border-fail hover:text-fail"
+        >
+          🗑 Xoá lịch sử
+        </button>
+      </div>
 
       <div className="mt-5 grid grid-cols-[16rem_1fr] gap-4">
         <ul className="max-h-[70vh] space-y-1 overflow-y-auto rounded-xl border border-border bg-surface p-2">

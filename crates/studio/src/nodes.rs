@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
+use futures::stream::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -292,155 +293,214 @@ impl NodeHandler for FetchChaptersHandler {
     }
 }
 
-// ── ChunkNarrate: pack into chunks, then render one voice file per chunk ───────
-pub struct ChunkNarrateHandler(pub Arc<Services>);
-impl ChunkNarrateHandler {
-    /// TTS a single templated line (intro/outro). `None` when the template (or
-    /// its rendered text) is empty, so the part is simply skipped.
-    async fn synth_line(
-        &self,
-        tts: &TtsClient,
-        p: &Profile,
-        template: &str,
-        vars: &TemplateVars,
-        kind: &str,
-        index: u32,
-    ) -> Result<Option<PathBuf>> {
-        if template.trim().is_empty() {
-            return Ok(None);
-        }
-        let text = render(template, vars)?;
-        if text.trim().is_empty() {
-            return Ok(None);
-        }
-        let req = SynthRequest {
-            text,
-            voice: Some(p.voice.clone()),
-            ref_id: None,
-            emotion: p.emotion.clone(),
-            format: "wav".into(),
-        };
-        tracing::info!(chunk = index, kind, "ChunkNarrate: speech line");
-        let bytes = tts
-            .synth(&req)
+// ── Chunk: pack chapters into duration-bounded chunks (the `videos` array) ─────
+async fn plan_into_ctx(services: &Services, node: &NodeDef, ctx: &mut RunContext) -> Result<()> {
+    let chs = chapters(ctx)?;
+    let p = services.profile().await;
+    let cap_override = cfg_u32(node, "cap_seconds").map(|v| v as f64);
+    let (videos, pack) = plan_videos(&chs, &p, cap_override);
+    if !pack.flagged.is_empty() {
+        let flagged: Vec<u32> = pack.flagged.iter().map(|c| c.number).collect();
+        tracing::warn!(?flagged, "Chunk: oversize chapters flagged");
+        ctx.log(format!(
+            "⚠ {} chương vượt giới hạn thời lượng và bị bỏ qua: {:?}",
+            flagged.len(),
+            flagged
+        ));
+    }
+    ctx.log(format!("Chia thành {} chunk", videos.len()));
+    ctx.set("packs", serde_json::to_value(&pack)?);
+    set_videos(ctx, &videos)?;
+    Ok(())
+}
+
+/// TTS a single templated line (intro/outro). `None` when the template (or its
+/// rendered text) is empty, so the part is simply skipped.
+async fn synth_line(
+    services: &Services,
+    tts: &TtsClient,
+    p: &Profile,
+    template: &str,
+    vars: &TemplateVars,
+    kind: &str,
+    index: u32,
+) -> Result<Option<PathBuf>> {
+    if template.trim().is_empty() {
+        return Ok(None);
+    }
+    let text = render(template, vars)?;
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    let req = SynthRequest {
+        text,
+        voice: Some(p.voice.clone()),
+        ref_id: None,
+        emotion: p.emotion.clone(),
+        format: "wav".into(),
+        temperature: Some(p.voice_temperature),
+        top_k: Some(p.voice_top_k),
+        top_p: Some(p.voice_top_p),
+        repetition_penalty: Some(p.voice_repetition_penalty),
+        silence_p: Some(p.segment_pause),
+        paragraph_silence_p: Some(p.paragraph_pause),
+    };
+    tracing::info!(chunk = index, kind, "Narrate: speech line");
+    let bytes = tts
+        .synth(&req)
+        .await
+        .with_context(|| format!("đọc lời {kind}"))?;
+    let out = services.work_dir.join(format!("{kind}_v{index}.wav"));
+    tokio::fs::write(&out, &bytes).await?;
+    Ok(Some(out))
+}
+
+// ── Narrate: render one voice file per chunk currently in `videos` ─────────────
+async fn narrate_videos(services: &Services, node: &NodeDef, ctx: &mut RunContext) -> Result<()> {
+    let chs = chapters(ctx)?;
+    let by_num: std::collections::HashMap<u32, &ChapterContent> =
+        chs.iter().map(|c| (c.number, c)).collect();
+    let p = services.profile().await;
+    let n = novel(ctx)?;
+    let nv = novel_vars(&n);
+
+    let intro_tpl = cfg_str(node, "intro_template")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| p.intro_template.clone());
+    let outro_tpl = cfg_str(node, "outro_template")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| p.outro_template.clone());
+    let delays = VoiceDelays {
+        before_intro: cfg_f64(node, "delay_before_intro").unwrap_or(p.delay_before_intro),
+        after_intro: cfg_f64(node, "delay_after_intro").unwrap_or(p.delay_after_intro),
+        after_content: cfg_f64(node, "delay_after_content").unwrap_or(p.delay_after_content),
+        after_outro: cfg_f64(node, "delay_after_outro").unwrap_or(p.delay_after_outro),
+    };
+
+    let tts = services.tts().await;
+    // Narrate up to N chapters at once across the TTS engine pool. Each chapter
+    // is still rendered whole by the engine (which does its own sentence-level
+    // split + crossfade), so audio is unchanged — only throughput improves.
+    let concurrency = cfg_u32(node, "concurrency").unwrap_or(2).max(1) as usize;
+    let mut videos = get_videos(ctx)?;
+    let total = videos.len();
+    tracing::info!(chunks = total, concurrency, "Narrate: rendering");
+    for (i, v) in videos.iter_mut().enumerate() {
+        let vindex = v.index;
+        tracing::info!(
+            chunk = vindex,
+            progress = format!("{}/{total}", i + 1),
+            chapters = ?v.chapter_numbers,
+            "Narrate: chunk"
+        );
+        let content_parts: Vec<PathBuf> = futures::stream::iter(v.chapter_numbers.clone())
+            .map(|num| {
+                let tts = &tts;
+                let by_num = &by_num;
+                let p = &p;
+                let cache_dir = services.cache_dir.as_path();
+                async move {
+                    let c = by_num
+                        .get(&num)
+                        .ok_or_else(|| anyhow!("thiếu nội dung chương {num}"))?;
+                    let req = SynthRequest {
+                        text: c.content.clone(),
+                        voice: Some(p.voice.clone()),
+                        ref_id: None,
+                        emotion: p.emotion.clone(),
+                        format: "wav".into(),
+                        temperature: Some(p.voice_temperature),
+                        top_k: Some(p.voice_top_k),
+                        top_p: Some(p.voice_top_p),
+                        repetition_penalty: Some(p.voice_repetition_penalty),
+                        silence_p: Some(p.segment_pause),
+                        paragraph_silence_p: Some(p.paragraph_pause),
+                    };
+                    tracing::info!(chunk = vindex, chapter = num, "Narrate: tts chapter");
+                    tts.synth_cached(cache_dir, &c.id, p.workflow_version, &req)
+                        .await
+                        .with_context(|| format!("đọc chương {num}"))
+                }
+            })
+            .buffered(concurrency)
+            .try_collect()
+            .await?;
+
+        let vars = make_vars(MakeVars {
+            novel: nv.clone(),
+            first: v.first,
+            last: v.last,
+            chapter_title: String::new(),
+            video_index: v.index,
+            site_name: p.site_name.clone(),
+        });
+        let intro_path =
+            synth_line(services, &tts, &p, &intro_tpl, &vars, "intro", v.index).await?;
+        let outro_path =
+            synth_line(services, &tts, &p, &outro_tpl, &vars, "outro", v.index).await?;
+
+        // Assemble: <delay> intro <delay> content… <delay> outro <delay>.
+        let content_refs: Vec<&Path> = content_parts.iter().map(|x| x.as_path()).collect();
+        let parts = media::voice_sequence(
+            intro_path.as_deref(),
+            &content_refs,
+            outro_path.as_deref(),
+            &delays,
+        );
+        let voice_out = services.work_dir.join(format!("voice_v{}.wav", v.index));
+        media::run_ffmpeg(&media::assemble_args(&parts, &voice_out))
             .await
-            .with_context(|| format!("đọc lời {kind}"))?;
-        let out = self.0.work_dir.join(format!("{kind}_v{index}.wav"));
-        tokio::fs::write(&out, &bytes).await?;
-        Ok(Some(out))
+            .with_context(|| format!("ghép tiếng chunk {}", v.index))?;
+
+        v.voice_path = Some(voice_out.to_string_lossy().into_owned());
+        v.intro_path = intro_path.map(|x| x.to_string_lossy().into_owned());
+        v.outro_path = outro_path.map(|x| x.to_string_lossy().into_owned());
+        ctx.log(format!(
+            "Chunk {} ({} chương {}–{}) đã lồng tiếng",
+            v.index,
+            v.chapter_numbers.len(),
+            v.first,
+            v.last
+        ));
+    }
+    set_videos(ctx, &videos)?;
+    Ok(())
+}
+
+/// Chunk only: pack chapters into the `videos` array (use before a Loop).
+pub struct ChunkHandler(pub Arc<Services>);
+#[async_trait]
+impl NodeHandler for ChunkHandler {
+    fn node_type(&self) -> &str {
+        "Chunk"
+    }
+    async fn run(&self, node: &NodeDef, ctx: &mut RunContext) -> Result<()> {
+        plan_into_ctx(&self.0, node, ctx).await
     }
 }
+
+/// Narrate only: render the chunks already in `videos` (use inside a Loop body).
+pub struct NarrateHandler(pub Arc<Services>);
+#[async_trait]
+impl NodeHandler for NarrateHandler {
+    fn node_type(&self) -> &str {
+        "Narrate"
+    }
+    async fn run(&self, node: &NodeDef, ctx: &mut RunContext) -> Result<()> {
+        narrate_videos(&self.0, node, ctx).await
+    }
+}
+
+/// Chunk + Narrate combined (the simple, non-loop path).
+pub struct ChunkNarrateHandler(pub Arc<Services>);
 #[async_trait]
 impl NodeHandler for ChunkNarrateHandler {
     fn node_type(&self) -> &str {
         "ChunkNarrate"
     }
     async fn run(&self, node: &NodeDef, ctx: &mut RunContext) -> Result<()> {
-        let chs = chapters(ctx)?;
-        let by_num: std::collections::HashMap<u32, &ChapterContent> =
-            chs.iter().map(|c| (c.number, c)).collect();
-        let p = self.0.profile().await;
-        let n = novel(ctx)?;
-        let nv = novel_vars(&n);
-
-        let cap_override = cfg_u32(node, "cap_seconds").map(|v| v as f64);
-        let (mut videos, pack) = plan_videos(&chs, &p, cap_override);
-        if !pack.flagged.is_empty() {
-            let flagged: Vec<u32> = pack.flagged.iter().map(|c| c.number).collect();
-            tracing::warn!(?flagged, "ChunkNarrate: oversize chapters flagged");
-            ctx.log(format!(
-                "⚠ {} chương vượt giới hạn thời lượng và bị bỏ qua: {:?}",
-                flagged.len(),
-                flagged
-            ));
-        }
-
-        let intro_tpl = cfg_str(node, "intro_template")
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| p.intro_template.clone());
-        let outro_tpl = cfg_str(node, "outro_template")
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| p.outro_template.clone());
-        let delays = VoiceDelays {
-            before_intro: cfg_f64(node, "delay_before_intro").unwrap_or(p.delay_before_intro),
-            after_intro: cfg_f64(node, "delay_after_intro").unwrap_or(p.delay_after_intro),
-            after_content: cfg_f64(node, "delay_after_content").unwrap_or(p.delay_after_content),
-            after_outro: cfg_f64(node, "delay_after_outro").unwrap_or(p.delay_after_outro),
-        };
-
-        let tts = self.0.tts().await;
-        let total = videos.len();
-        tracing::info!(chunks = total, "ChunkNarrate: rendering");
-        for (i, v) in videos.iter_mut().enumerate() {
-            tracing::info!(
-                chunk = v.index,
-                progress = format!("{}/{total}", i + 1),
-                chapters = ?v.chapter_numbers,
-                "ChunkNarrate: chunk"
-            );
-            // Narrate each chapter's content (cached by chapter id + text).
-            let mut content_parts: Vec<PathBuf> = Vec::new();
-            for num in &v.chapter_numbers {
-                let c = by_num
-                    .get(num)
-                    .ok_or_else(|| anyhow!("thiếu nội dung chương {num}"))?;
-                let req = SynthRequest {
-                    text: c.content.clone(),
-                    voice: Some(p.voice.clone()),
-                    ref_id: None,
-                    emotion: p.emotion.clone(),
-                    format: "wav".into(),
-                };
-                tracing::info!(chunk = v.index, chapter = num, "ChunkNarrate: tts chapter");
-                let path = tts
-                    .synth_cached(&self.0.cache_dir, &c.id, p.workflow_version, &req)
-                    .await
-                    .with_context(|| format!("đọc chương {num}"))?;
-                content_parts.push(path);
-            }
-
-            let vars = make_vars(MakeVars {
-                novel: nv.clone(),
-                first: v.first,
-                last: v.last,
-                chapter_title: String::new(),
-                video_index: v.index,
-                site_name: p.site_name.clone(),
-            });
-            let intro_path = self
-                .synth_line(&tts, &p, &intro_tpl, &vars, "intro", v.index)
-                .await?;
-            let outro_path = self
-                .synth_line(&tts, &p, &outro_tpl, &vars, "outro", v.index)
-                .await?;
-
-            // Assemble: <delay> intro <delay> content… <delay> outro <delay>.
-            let content_refs: Vec<&Path> = content_parts.iter().map(|x| x.as_path()).collect();
-            let parts = media::voice_sequence(
-                intro_path.as_deref(),
-                &content_refs,
-                outro_path.as_deref(),
-                &delays,
-            );
-            let voice_out = self.0.work_dir.join(format!("voice_v{}.wav", v.index));
-            media::run_ffmpeg(&media::assemble_args(&parts, &voice_out))
-                .await
-                .with_context(|| format!("ghép tiếng chunk {}", v.index))?;
-
-            v.voice_path = Some(voice_out.to_string_lossy().into_owned());
-            v.intro_path = intro_path.map(|x| x.to_string_lossy().into_owned());
-            v.outro_path = outro_path.map(|x| x.to_string_lossy().into_owned());
-            ctx.log(format!(
-                "Chunk {} ({} chương {}–{}) đã lồng tiếng",
-                v.index,
-                v.chapter_numbers.len(),
-                v.first,
-                v.last
-            ));
-        }
-        ctx.set("packs", serde_json::to_value(&pack)?);
-        set_videos(ctx, &videos)?;
-        Ok(())
+        plan_into_ctx(&self.0, node, ctx).await?;
+        narrate_videos(&self.0, node, ctx).await
     }
 }
 
@@ -641,8 +701,12 @@ pub fn register_default(registry: &mut Registry, services: Arc<Services>) {
     registry.register(Box::new(SourceHandler(services.clone())));
     registry.register(Box::new(FetchChaptersHandler(services.clone())));
     registry.register(Box::new(ChunkNarrateHandler(services.clone())));
+    registry.register(Box::new(ChunkHandler(services.clone())));
+    registry.register(Box::new(NarrateHandler(services.clone())));
     registry.register(Box::new(PostProcessHandler(services.clone())));
     registry.register(Box::new(UploadYouTubeHandler(services)));
+    // Note: `If` and `Loop` are handled directly by the executor, not via a
+    // registered handler.
 }
 
 /// Palette + config schema for the editor UI: each node type, its label, a short
@@ -669,8 +733,29 @@ pub fn node_specs() -> Value {
             "desc": "Gộp chương thành các chunk theo thời lượng, mỗi chunk = 1 file tiếng: lời mở đầu → nội dung → lời tạm biệt (có khoảng lặng).",
             "fields": [
                 { "key": "cap_seconds", "label": "Giới hạn mỗi chunk (giây)", "kind": "number", "default": 5400 },
+                { "key": "concurrency", "label": "Số chương đọc song song", "kind": "number", "default": 2 },
                 { "key": "intro_template", "label": "Lời mở đầu (để trống = dùng mặc định)", "kind": "textarea", "default": "" },
                 { "key": "outro_template", "label": "Lời tạm biệt (để trống = dùng mặc định)", "kind": "textarea", "default": "" },
+                { "key": "delay_before_intro", "label": "Lặng trước lời mở đầu (giây)", "kind": "number", "default": 0.8 },
+                { "key": "delay_after_intro", "label": "Lặng sau lời mở đầu (giây)", "kind": "number", "default": 0.8 },
+                { "key": "delay_after_content", "label": "Lặng trước lời tạm biệt (giây)", "kind": "number", "default": 0.8 },
+                { "key": "delay_after_outro", "label": "Lặng cuối (giây)", "kind": "number", "default": 1.2 }
+            ]
+        },
+        {
+            "type": "Chunk", "label": "Chia chunk",
+            "desc": "Gộp chương thành các chunk theo thời lượng (dùng trước khối Lặp để xử lý từng chunk).",
+            "fields": [
+                { "key": "cap_seconds", "label": "Giới hạn mỗi chunk (giây)", "kind": "number", "default": 5400 }
+            ]
+        },
+        {
+            "type": "Narrate", "label": "Đọc (TTS)",
+            "desc": "Lồng tiếng các chunk hiện có: lời mở đầu → nội dung → lời tạm biệt.",
+            "fields": [
+                { "key": "concurrency", "label": "Số chương đọc song song", "kind": "number", "default": 2 },
+                { "key": "intro_template", "label": "Lời mở đầu (trống = mặc định)", "kind": "textarea", "default": "" },
+                { "key": "outro_template", "label": "Lời tạm biệt (trống = mặc định)", "kind": "textarea", "default": "" },
                 { "key": "delay_before_intro", "label": "Lặng trước lời mở đầu (giây)", "kind": "number", "default": 0.8 },
                 { "key": "delay_after_intro", "label": "Lặng sau lời mở đầu (giây)", "kind": "number", "default": 0.8 },
                 { "key": "delay_after_content", "label": "Lặng trước lời tạm biệt (giây)", "kind": "number", "default": 0.8 },
@@ -692,6 +777,26 @@ pub fn node_specs() -> Value {
             "fields": [
                 { "key": "privacy", "label": "Quyền riêng tư", "kind": "select", "default": "private", "options": ["private", "unlisted", "public"] }
             ]
+        },
+        {
+            "type": "Loop", "label": "Lặp (Loop)",
+            "desc": "Lặp qua từng mục của một mảng (vd: từng chunk). Nhánh 'body' chạy mỗi vòng, 'done' chạy sau khi xong.",
+            "control": true,
+            "handles": ["body", "done"],
+            "fields": [
+                { "key": "over", "label": "Mảng để lặp (khoá ngữ cảnh)", "kind": "text", "default": "videos" }
+            ]
+        },
+        {
+            "type": "If", "label": "Điều kiện (If)",
+            "desc": "Rẽ nhánh theo điều kiện. Nhánh 'then' nếu đúng, 'else' nếu sai.",
+            "control": true,
+            "handles": ["then", "else"],
+            "fields": [
+                { "key": "key", "label": "Khoá ngữ cảnh", "kind": "text", "default": "videos" },
+                { "key": "op", "label": "Phép so sánh", "kind": "select", "default": "nonempty", "options": ["nonempty", "empty", "truthy", "eq", "ne", "gt", "lt"] },
+                { "key": "value", "label": "Giá trị (cho eq/ne/gt/lt)", "kind": "text", "default": "" }
+            ]
         }
     ])
 }
@@ -712,6 +817,7 @@ pub fn default_workflow() -> crate::workflow::WorkflowDef {
             "ChunkNarrate",
             json!({
                 "cap_seconds": 5400,
+                "concurrency": 2,
                 "delay_before_intro": 0.8,
                 "delay_after_intro": 0.8,
                 "delay_after_content": 0.8,
@@ -743,11 +849,79 @@ pub fn default_workflow() -> crate::workflow::WorkflowDef {
         .map(|w| EdgeDef {
             from: w[0].0.into(),
             to: w[1].0.into(),
+            handle: None,
         })
         .collect();
     WorkflowDef {
         id: "default".into(),
         name: "Pipeline mặc định".into(),
+        version: 1,
+        nodes,
+        edges,
+    }
+}
+
+/// A loop-based pipeline: chunk first, then process each chunk independently in
+/// a Loop body (Narrate → PostProcess), so a single failed chunk is its own
+/// retriable step. Upload runs after the loop completes.
+pub fn loop_workflow() -> crate::workflow::WorkflowDef {
+    use crate::workflow::{EdgeDef, Position, WorkflowDef};
+    let nd = |id: &str, t: &str, cfg: Value, x: f64, y: f64| NodeDef {
+        id: id.to_string(),
+        node_type: t.to_string(),
+        config: cfg,
+        position: Some(Position { x, y }),
+    };
+    let ed = |from: &str, to: &str, handle: Option<&str>| EdgeDef {
+        from: from.to_string(),
+        to: to.to_string(),
+        handle: handle.map(|s| s.to_string()),
+    };
+    let nodes = vec![
+        nd(
+            "src",
+            "Source",
+            json!({ "slug": "", "first": 1, "last": DEFAULT_CHAPTER_WINDOW }),
+            80.0,
+            120.0,
+        ),
+        nd("fetch", "FetchChapters", json!({}), 300.0, 120.0),
+        nd(
+            "chunk",
+            "Chunk",
+            json!({ "cap_seconds": 5400 }),
+            520.0,
+            120.0,
+        ),
+        nd("loop", "Loop", json!({ "over": "videos" }), 740.0, 120.0),
+        nd("narr", "Narrate", json!({ "concurrency": 2 }), 660.0, 300.0),
+        nd(
+            "post",
+            "PostProcess",
+            json!({ "make_video": true, "background_is_video": false }),
+            900.0,
+            300.0,
+        ),
+        nd(
+            "up",
+            "UploadYouTube",
+            json!({ "privacy": "private" }),
+            1000.0,
+            120.0,
+        ),
+    ];
+    let edges = vec![
+        ed("src", "fetch", None),
+        ed("fetch", "chunk", None),
+        ed("chunk", "loop", None),
+        ed("loop", "narr", Some("body")),
+        ed("narr", "post", None),
+        ed("post", "loop", None), // back-edge: end of body
+        ed("loop", "up", Some("done")),
+    ];
+    WorkflowDef {
+        id: "loop".into(),
+        name: "Pipeline có vòng lặp".into(),
         version: 1,
         nodes,
         edges,

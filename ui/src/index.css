@@ -1,9 +1,30 @@
 /* Tailwind v4 — theme + utilities only. Preflight (base reset) is deliberately
    NOT imported so the existing App.css-styled TTS UI is left untouched. New
    router pages opt into Tailwind utilities. */
-@layer theme, components, utilities;
+@layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
+
+/* Minimal control reset (full preflight is intentionally NOT loaded so App.css
+   keeps its styling). Lives in @layer base so any unlayered App.css class rule
+   still wins; only un-classed Tailwind-styled controls pick this up. */
+@layer base {
+  button {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    margin: 0;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+}
 
 @theme {
   --color-canvas: #0d1117;

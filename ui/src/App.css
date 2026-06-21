@@ -83,14 +83,14 @@ body {
 @keyframes pulse { 50% { opacity: 0.3; } }
 
 /* Layout */
-.grid {
+.tts-grid {
   display: grid;
   grid-template-columns: 1.35fr 1fr;
   gap: 22px;
   align-items: start;
 }
 @media (max-width: 880px) {
-  .grid { grid-template-columns: 1fr; }
+  .tts-grid { grid-template-columns: 1fr; }
 }
 
 .panel {
@@ -480,12 +480,15 @@ body {
 .badge.done { background: var(--accent); color: oklch(16% 0.02 265); }
 .badge.running { background: oklch(75% 0.15 90); color: oklch(20% 0.02 265); }
 .badge.failed { background: var(--danger); color: white; }
+.badge.cancelled { background: var(--line); color: var(--text); }
 
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
 .dot.done { background: var(--accent); }
 .dot.running { background: oklch(75% 0.15 90); animation: pulse 1s infinite; }
 .dot.failed { background: var(--danger); }
 .dot.queued { background: var(--muted); }
+.dot.cancelled { background: var(--line); }
+.step-iter { color: var(--muted); font-weight: 400; }
 
 .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .step-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 7px; cursor: pointer; font-size: 12.5px; }

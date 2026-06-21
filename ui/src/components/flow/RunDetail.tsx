@@ -1,39 +1,55 @@
 import { useEffect, useState } from "react";
-import { fileUrl, retryRun, type RunDetail, type RunStep } from "../../studioApi";
+import { cancelRun, fileUrl, retryRun, type RunDetail, type RunStep } from "../../studioApi";
 
 export function RunDetailView({ detail }: { detail: RunDetail }) {
   const [openStep, setOpenStep] = useState<string | null>(null);
+  const active = detail.status === "running" || detail.status === "queued";
   return (
     <>
       <div className="rd-head">
         <b>{detail.label}</b>{" "}
         <span className={`badge ${detail.status}`}>{detail.status}</span>
+        {active && (
+          <button
+            className="mini danger"
+            title="Dừng run này"
+            onClick={() => cancelRun(detail.id).catch((e) => alert(String(e)))}
+          >
+            ⏹ Dừng
+          </button>
+        )}
       </div>
       {detail.error && <p className="error">{detail.error}</p>}
       <ul className="steps">
-        {detail.steps.map((s) => (
-          <li key={s.node_id} className={`step ${s.status}`}>
-            <div
-              className="step-row"
-              onClick={() => setOpenStep(openStep === s.node_id ? null : s.node_id)}
-            >
-              <span className={`dot ${s.status}`} />
-              <span className="step-name">{s.node_type}</span>
-              <span className="step-status">{s.status}</span>
-              <button
-                className="step-retry"
-                title="Chạy lại từ khối này"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  retryRun(detail.id, s.node_id).catch((err) => alert(String(err)));
-                }}
+        {detail.steps.map((s) => {
+          const iter = s.node_id.includes("#") ? s.node_id.split("#").slice(1).join("·") : null;
+          return (
+            <li key={s.node_id} className={`step ${s.status}`}>
+              <div
+                className="step-row"
+                onClick={() => setOpenStep(openStep === s.node_id ? null : s.node_id)}
               >
-                ↻
-              </button>
-            </div>
-            {openStep === s.node_id && <StepIO step={s} />}
-          </li>
-        ))}
+                <span className={`dot ${s.status}`} />
+                <span className="step-name">
+                  {s.node_type}
+                  {iter && <span className="step-iter"> · vòng {iter}</span>}
+                </span>
+                <span className="step-status">{s.status}</span>
+                <button
+                  className="step-retry"
+                  title={iter ? `Chạy lại vòng ${iter} từ khối này` : "Chạy lại từ khối này"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    retryRun(detail.id, s.node_id).catch((err) => alert(String(err)));
+                  }}
+                >
+                  ↻
+                </button>
+              </div>
+              {openStep === s.node_id && <StepIO step={s} />}
+            </li>
+          );
+        })}
       </ul>
     </>
   );

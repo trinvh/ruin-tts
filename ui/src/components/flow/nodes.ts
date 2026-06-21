@@ -13,19 +13,45 @@ export function defaultsFromSpec(spec: NodeSpec | undefined): Record<string, unk
   return cfg;
 }
 
-export function nodeStyle(selected: boolean, status?: RunStep["status"]) {
-  const color =
-    status === "done"
-      ? "#3fb950"
-      : status === "running"
-      ? "#d29922"
-      : status === "failed"
-      ? "#f85149"
-      : "#2f3b52";
+export type Validity = "ok" | "needs-config" | "unknown";
+
+/** Static validation of a node's config (independent of any run). */
+export function nodeValidity(
+  type: string,
+  config: Record<string, unknown> | undefined,
+  specByType: Record<string, NodeSpec>,
+): Validity {
+  const spec = specByType[type];
+  if (!spec) return "unknown"; // removed/unknown block type — cannot run
+  for (const f of spec.fields) {
+    if (f.kind === "novel") {
+      const v = config?.[f.key];
+      if (!v || (typeof v === "string" && v.trim() === "")) return "needs-config";
+    }
+  }
+  return "ok";
+}
+
+export function nodeStyle(
+  selected: boolean,
+  status?: RunStep["status"],
+  validity: Validity = "ok",
+) {
+  // Run status takes precedence; otherwise reflect config validity.
+  let color = "#2f3b52";
+  let dashed = false;
+  if (status === "done") color = "#3fb950";
+  else if (status === "running") color = "#d29922";
+  else if (status === "failed") color = "#f85149";
+  else if (validity === "unknown") {
+    color = "#f85149";
+    dashed = true;
+  } else if (validity === "needs-config") color = "#d29922";
+
   return {
     background: "#1c2333",
     color: "#e6edf3",
-    border: `2px solid ${selected ? "#7c83ff" : color}`,
+    border: `2px ${dashed ? "dashed" : "solid"} ${selected ? "#7c83ff" : color}`,
     borderRadius: 10,
     width: 220,
     padding: 8,
@@ -47,7 +73,7 @@ export function nodeLabel(specByType: Record<string, NodeSpec>, n: Node): string
 export function toGraph(
   meta: { id: string; name: string; version: number },
   nodes: Node[],
-  edges: { source: string; target: string }[],
+  edges: { source: string; target: string; sourceHandle?: string | null }[],
 ): Graph {
   return {
     ...meta,
@@ -57,6 +83,10 @@ export function toGraph(
       config: (n.data as any).config ?? {},
       position: n.position,
     })),
-    edges: edges.map((e) => ({ from: e.source, to: e.target })),
+    edges: edges.map((e) => ({
+      from: e.source,
+      to: e.target,
+      handle: e.sourceHandle ?? undefined,
+    })),
   };
 }
