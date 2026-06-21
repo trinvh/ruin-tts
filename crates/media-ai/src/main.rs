@@ -30,6 +30,11 @@ use serde_json::json;
 use crate::analyze::Analyzer;
 use crate::types::AnalyzeRequest;
 
+/// Default HF repo for the project-exported ONNX models (speaker embedding +
+/// age/gender). Populate it once with `make upload-models` (see
+/// tools/upload-models.sh); a missing repo just degrades gracefully.
+const MODELS_REPO: &str = "trinvhco/ruin-media-ai";
+
 #[derive(Parser)]
 #[command(about = "media-ai: audio analysis sidecar (ASR + diarization + age/gender), Rust port")]
 struct Args {
@@ -49,24 +54,38 @@ struct Args {
         default_value = "ggml-large-v3-turbo.bin"
     )]
     whisper_model: String,
-    /// HF repo holding the exported age/gender ONNX (omit to disable age/gender).
-    #[arg(long, env = "MEDIA_AI_AGEGENDER_REPO")]
+    /// HF repo holding the exported age/gender ONNX. Defaults to the project's
+    /// model repo; download failure degrades gracefully (no age/gender).
+    #[arg(long, env = "MEDIA_AI_AGEGENDER_REPO", default_value = MODELS_REPO)]
     agegender_repo: Option<String>,
-    #[arg(long, env = "MEDIA_AI_AGEGENDER_MODEL", default_value = "model.onnx")]
+    #[arg(
+        long,
+        env = "MEDIA_AI_AGEGENDER_MODEL",
+        default_value = "agegender.onnx"
+    )]
     agegender_model: String,
     /// Local path to the age/gender ONNX (overrides the repo download).
     #[arg(long, env = "MEDIA_AI_AGEGENDER_PATH")]
     agegender_path: Option<String>,
     /// HF repo holding the exported speaker-embedding ONNX (WavLM-SV).
-    #[arg(long, env = "MEDIA_AI_EMBED_REPO")]
+    #[arg(long, env = "MEDIA_AI_EMBED_REPO", default_value = MODELS_REPO)]
     embed_repo: Option<String>,
-    #[arg(long, env = "MEDIA_AI_EMBED_MODEL", default_value = "model.onnx")]
+    #[arg(
+        long,
+        env = "MEDIA_AI_EMBED_MODEL",
+        default_value = "speaker-embedding.onnx"
+    )]
     embed_model: String,
     /// Local path to the speaker-embedding ONNX (overrides the repo download).
     #[arg(long, env = "MEDIA_AI_EMBED_PATH")]
     embed_path: Option<String>,
     /// HF repo holding the pyannote segmentation ONNX (for overlap detection).
-    #[arg(long, env = "MEDIA_AI_SEGMENT_REPO")]
+    /// Defaults to sherpa-onnx's public (non-gated) pre-export.
+    #[arg(
+        long,
+        env = "MEDIA_AI_SEGMENT_REPO",
+        default_value = "csukuangfj/sherpa-onnx-pyannote-segmentation-3-0"
+    )]
     segment_repo: Option<String>,
     #[arg(long, env = "MEDIA_AI_SEGMENT_MODEL", default_value = "model.onnx")]
     segment_model: String,
@@ -78,48 +97,27 @@ struct Args {
     diarize_threshold: Option<f32>,
 }
 
-/// Resolve the optional age/gender ONNX: explicit local path, else an HF repo
-/// download, else None (disabled).
-fn resolve_agegender(args: &Args) -> Result<Option<std::path::PathBuf>> {
-    if let Some(p) = &args.agegender_path {
-        return Ok(Some(std::path::PathBuf::from(p)));
+/// Resolve an optional ONNX: explicit local path wins; else try the HF repo.
+/// A download failure is **non-fatal** — it logs and returns `None`, so the
+/// sidecar still starts (just without that capability) when a default repo isn't
+/// populated yet.
+fn resolve_model(
+    path: &Option<String>,
+    repo: &Option<String>,
+    model: &str,
+    token: Option<String>,
+    label: &str,
+) -> Option<std::path::PathBuf> {
+    if let Some(p) = path {
+        return Some(std::path::PathBuf::from(p));
     }
-    match &args.agegender_repo {
-        Some(repo) => Ok(Some(
-            models::hf_file(repo, &args.agegender_model, args.hf_token.clone())
-                .context("tải model age/gender")?,
-        )),
-        None => Ok(None),
-    }
-}
-
-/// Resolve the optional speaker-embedding ONNX (WavLM-SV): explicit local path,
-/// else an HF repo download, else None (diarization → single speaker).
-fn resolve_embed(args: &Args) -> Result<Option<std::path::PathBuf>> {
-    if let Some(p) = &args.embed_path {
-        return Ok(Some(std::path::PathBuf::from(p)));
-    }
-    match &args.embed_repo {
-        Some(repo) => Ok(Some(
-            models::hf_file(repo, &args.embed_model, args.hf_token.clone())
-                .context("tải model speaker-embedding")?,
-        )),
-        None => Ok(None),
-    }
-}
-
-/// Resolve the optional pyannote segmentation ONNX: explicit local path, else an
-/// HF repo download, else None (overlap detection disabled).
-fn resolve_segment(args: &Args) -> Result<Option<std::path::PathBuf>> {
-    if let Some(p) = &args.segment_path {
-        return Ok(Some(std::path::PathBuf::from(p)));
-    }
-    match &args.segment_repo {
-        Some(repo) => Ok(Some(
-            models::hf_file(repo, &args.segment_model, args.hf_token.clone())
-                .context("tải model segmentation")?,
-        )),
-        None => Ok(None),
+    let repo = repo.as_ref()?;
+    match models::hf_file(repo, model, token) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            tracing::warn!("không tải được model {label} ({repo}/{model}): {e} — bỏ qua");
+            None
+        }
     }
 }
 
@@ -145,11 +143,30 @@ async fn main() -> Result<()> {
     )
     .context("tải model whisper")?;
     let asr = asr::Asr::load(model_path.to_string_lossy().as_ref())?;
-    let agegender_path = resolve_agegender(&args)?;
+    let tok = args.hf_token.clone();
+    let agegender_path = resolve_model(
+        &args.agegender_path,
+        &args.agegender_repo,
+        &args.agegender_model,
+        tok.clone(),
+        "age/gender",
+    );
     let agegender = agegender::AgeGenderModel::load(agegender_path.as_deref())?;
-    let embed_path = resolve_embed(&args)?;
+    let embed_path = resolve_model(
+        &args.embed_path,
+        &args.embed_repo,
+        &args.embed_model,
+        tok.clone(),
+        "speaker-embedding",
+    );
     let embedder = embed::Embedder::load(embed_path.as_deref())?;
-    let segment_path = resolve_segment(&args)?;
+    let segment_path = resolve_model(
+        &args.segment_path,
+        &args.segment_repo,
+        &args.segment_model,
+        tok,
+        "segmentation",
+    );
     let segmenter = segment::Segmenter::load(segment_path.as_deref())?;
     let threshold = args.diarize_threshold.unwrap_or(diarize::DEFAULT_THRESHOLD);
     let analyzer = Analyzer::new(asr, embedder, agegender, segmenter, threshold);

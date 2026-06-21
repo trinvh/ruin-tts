@@ -15,7 +15,7 @@ CLI     := ./target/release/vieneu
         server server-dev cli voices synth batch smoke \
         ui-install ui-build ui-dev ui-web e2e \
         studio-server studio-web studio-test \
-        media-ai media-ai-run media-ai-pip media-ai-rs
+        media-ai media-ai-run media-ai-pip media-ai-rs upload-models
 
 ## ── Studio (webnovel → audiobook → YouTube automation) ─────────────
 studio-server: ## Run the studio automation server (set RUIN_API_KEY)
@@ -42,8 +42,11 @@ media-ai-pip: ## Fallback without uv: create a plain venv + install (services/me
 	cd services/media-ai && python3 -m venv .venv && ./.venv/bin/pip install -U pip && ./.venv/bin/pip install -e .
 	@echo "Run with: cd services/media-ai && ./.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8099"
 
-media-ai-rs: ## Run the Rust media-ai sidecar (ASR ported; diarization/age-gender WIP)
+media-ai-rs: ## Run the Rust media-ai sidecar (ASR + diarization + age/gender)
 	cargo run -p media-ai --release -- --addr $(MEDIA_AI_ADDR)
+
+upload-models: ## Export + upload the speaker-embedding + age/gender ONNX to HF (run once)
+	bash tools/upload-models.sh
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
