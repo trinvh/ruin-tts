@@ -15,7 +15,7 @@ CLI     := ./target/release/vieneu
         server server-dev cli voices synth batch smoke \
         ui-install ui-build ui-dev ui-web e2e \
         studio-server studio-web studio-test \
-        media-ai media-ai-run
+        media-ai media-ai-run media-ai-pip
 
 ## ── Studio (webnovel → audiobook → YouTube automation) ─────────────
 studio-server: ## Run the studio automation server (set RUIN_API_KEY)
@@ -28,12 +28,19 @@ studio-test: ## Run studio crate tests
 	cargo test -p studio
 
 ## ── Video dubbing sidecar (services/media-ai, :8099) ───────────────
-media-ai: ## Set up the dubbing sidecar (Python venv + deps; Intel Mac uses CPU whisper)
-	cd services/media-ai && python3 -m venv .venv && ./.venv/bin/pip install -U pip && ./.venv/bin/pip install -e .
+MEDIA_AI_ADDR ?= 127.0.0.1:8099
+
+media-ai: ## Install dubbing sidecar deps via uv (Intel Mac uses CPU whisper)
+	cd services/media-ai && uv sync
 	@echo "Next: put HF_TOKEN in services/media-ai/.env, then 'make media-ai-run'"
 
-media-ai-run: ## Run the dubbing sidecar (ASR + diarization)
-	cd services/media-ai && ./.venv/bin/uvicorn app:app --port 8099
+media-ai-run: ## Run the dubbing sidecar (ASR + diarization); uv auto-creates the venv
+	cd services/media-ai && uv run uvicorn app:app \
+		--host $(word 1,$(subst :, ,$(MEDIA_AI_ADDR))) --port $(word 2,$(subst :, ,$(MEDIA_AI_ADDR)))
+
+media-ai-pip: ## Fallback without uv: create a plain venv + install (services/media-ai/.venv)
+	cd services/media-ai && python3 -m venv .venv && ./.venv/bin/pip install -U pip && ./.venv/bin/pip install -e .
+	@echo "Run with: cd services/media-ai && ./.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8099"
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
