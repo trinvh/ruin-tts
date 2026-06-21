@@ -1,11 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { getInfo, getVoices, type ServerInfo, type Voice } from "../api";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
+import { getInfo, getVoices, synthDirect, type ServerInfo, type SynthParams, type Voice } from "../api";
 import { buildSubmit, useQueue, type QueueItem } from "../queue";
 import { copyFile, isTauri, saveAsDialog } from "../platform";
 import { useTtsSettings } from "../ttsSettings";
+import {
+  addClone,
+  ensureRefId,
+  loadClones,
+  removeClone,
+  type ClonedVoice,
+} from "../clonedVoices";
+import { toWav } from "../wav";
 import { C, FONT, MONO, injectStudioStyles } from "../studio-shell/theme";
 
 type Status = "starting" | "ready" | "error";
+
+const PREVIEW_TEXT = "Xin chào, đây là giọng đọc thử của Beesoft Studio.";
 
 const SAMPLE =
   "[cười] Trời ơi, cái giọng nó tự nhiên mà mượt mà dã man, nghe không khác gì người thật luôn.";
@@ -61,8 +71,17 @@ export function StudioPage() {
   const [playing, setPlaying] = useState(false);
   const [volume, setVolume] = useState(1);
 
+  // Voice cloning + preview state
+  const [clones, setClones] = useState<ClonedVoice[]>(() => loadClones());
+  const [previewing, setPreviewing] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [cloning, setCloning] = useState(false);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaRecRef = useRef<MediaRecorder | null>(null);
+  const recChunksRef = useRef<Blob[]>([]);
 
   const queue = useQueue(outputDir, concurrency);
 
@@ -126,14 +145,19 @@ export function StudioPage() {
     }
   }, [selectedItemId, queue.items]);
 
+  const selectedClone = clones.find((c) => c.id === voice) ?? null;
   const selectedVoice = voices.find((v) => v.id === voice);
-  const voiceLabel = selectedVoice?.label ?? voice;
+  const voiceLabel = selectedClone?.name ?? selectedVoice?.label ?? voice;
   const selectedItem = queue.items.find((x) => x.id === selectedItemId) ?? null;
   const selectedVoiceIdx = voices.findIndex((v) => v.id === voice);
 
-  const filteredVoices = voiceSearch.trim()
-    ? voices.filter((v) => v.label.toLowerCase().includes(voiceSearch.trim().toLowerCase()))
+  const q = voiceSearch.trim().toLowerCase();
+  const filteredVoices = q
+    ? voices.filter((v) => v.label.toLowerCase().includes(q))
     : voices;
+  const filteredClones = q
+    ? clones.filter((c) => c.name.toLowerCase().includes(q))
+    : clones;
 
   // Insert label at caret
   function insertLabel(label: string) {
@@ -153,20 +177,39 @@ export function StudioPage() {
     }, 0);
   }
 
-  const generate = useCallback(() => {
+  const generate = useCallback(async () => {
     if (!text.trim()) return;
-    const params = {
-      text,
-      voice: voice || undefined,
-      emotion,
-      temperature,
-      top_k: topK,
-      top_p: topP,
-      repetition_penalty: repPen,
-      format,
-    };
-    queue.enqueue(buildSubmit(params, voiceLabel));
-  }, [text, voice, emotion, temperature, topK, topP, repPen, format, voiceLabel, queue]);
+    try {
+      let params: SynthParams;
+      if (selectedClone) {
+        const ref_id = await ensureRefId(selectedClone);
+        params = {
+          text,
+          ref_id,
+          emotion,
+          temperature,
+          top_k: topK,
+          top_p: topP,
+          repetition_penalty: repPen,
+          format,
+        };
+      } else {
+        params = {
+          text,
+          voice: voice || undefined,
+          emotion,
+          temperature,
+          top_k: topK,
+          top_p: topP,
+          repetition_penalty: repPen,
+          format,
+        };
+      }
+      queue.enqueue(buildSubmit(params, voiceLabel));
+    } catch (e) {
+      alert("Không tạo được ref giọng nhân bản: " + (e instanceof Error ? e.message : String(e)));
+    }
+  }, [text, voice, selectedClone, emotion, temperature, topK, topP, repPen, format, voiceLabel, queue]);
 
   const saveAs = useCallback(async (it: QueueItem) => {
     const fname = `beesoft.${it.format}`;
@@ -180,6 +223,114 @@ export function StudioPage() {
       a.click();
     }
   }, []);
+
+  // ── Voice preview (nghe thử) ───────────────────────────────────────────────
+  const preview = useCallback(
+    async (target: { voiceId: string } | { clone: ClonedVoice }) => {
+      if (status !== "ready" || previewing) return;
+      const id = "voiceId" in target ? target.voiceId : target.clone.id;
+      setPreviewing(id);
+      try {
+        let params: SynthParams;
+        const common = {
+          text: PREVIEW_TEXT,
+          emotion,
+          temperature,
+          top_k: topK,
+          top_p: topP,
+          repetition_penalty: repPen,
+          format: "wav" as const,
+        };
+        if ("clone" in target) {
+          const ref_id = await ensureRefId(target.clone);
+          params = { ...common, ref_id };
+        } else {
+          params = { ...common, voice: target.voiceId };
+        }
+        const blob = await synthDirect(params);
+        const url = URL.createObjectURL(blob);
+        const a = new Audio(url);
+        a.onended = () => URL.revokeObjectURL(url);
+        await a.play();
+      } catch (e) {
+        alert("Không nghe thử được giọng: " + (e instanceof Error ? e.message : String(e)));
+      } finally {
+        setPreviewing(null);
+      }
+    },
+    [status, previewing, emotion, temperature, topK, topP, repPen],
+  );
+
+  // ── Add a clone (shared by record + upload) ────────────────────────────────
+  const commitClone = useCallback(async (wav: Blob, defaultName: string) => {
+    const name = prompt("Tên giọng nhân bản:", defaultName);
+    if (!name) return;
+    setCloning(true);
+    try {
+      setClones(await addClone(name, wav));
+    } catch (e) {
+      alert("Không nhân bản được giọng: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setCloning(false);
+    }
+  }, []);
+
+  // ── Mic recording ──────────────────────────────────────────────────────────
+  const toggleRecord = useCallback(async () => {
+    if (recording) {
+      mediaRecRef.current?.stop();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      recChunksRef.current = [];
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) recChunksRef.current.push(e.data);
+      };
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        setRecording(false);
+        const raw = new Blob(recChunksRef.current, { type: mr.mimeType || "audio/webm" });
+        try {
+          const wav = await toWav(raw);
+          await commitClone(wav, "Giọng của tôi");
+        } catch (e) {
+          alert("Không xử lý được bản ghi: " + (e instanceof Error ? e.message : String(e)));
+        }
+      };
+      mediaRecRef.current = mr;
+      mr.start();
+      setRecording(true);
+    } catch (e) {
+      alert("Không truy cập được micro: " + (e instanceof Error ? e.message : String(e)));
+    }
+  }, [recording, commitClone]);
+
+  // ── File upload ────────────────────────────────────────────────────────────
+  const onUploadFile = useCallback(
+    async (e: ChangeEvent<HTMLInputElement>) => {
+      const f = e.target.files?.[0];
+      e.target.value = "";
+      if (!f) return;
+      try {
+        const wav = await toWav(f);
+        await commitClone(wav, f.name.replace(/\.[^.]+$/, ""));
+      } catch (err) {
+        alert("Không đọc được tệp âm thanh: " + (err instanceof Error ? err.message : String(err)));
+      }
+    },
+    [commitClone],
+  );
+
+  const deleteClone = useCallback(
+    (cv: ClonedVoice) => {
+      const next = removeClone(cv.id);
+      setClones(next);
+      if (voice === cv.id) setVoice(voices[0]?.id ?? "");
+    },
+    [voice, voices],
+  );
 
   const togglePlayPause = () => {
     const el = audioRef.current;
@@ -343,21 +494,42 @@ export function StudioPage() {
       color: C.muted3,
       marginTop: 1,
     },
-    voicePreviewBtn: {
+    voicePreviewBtn: (enabled: boolean, active: boolean) => ({
       width: 22,
       height: 22,
       borderRadius: "50%",
-      background: C.panel2,
+      background: active ? "rgba(80,209,170,.18)" : C.panel2,
       border: "none",
-      color: "#ccc",
+      color: active ? C.teal : "#ccc",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
       fontSize: 9,
-      opacity: 0.3,
-      cursor: "not-allowed",
+      opacity: enabled ? 1 : 0.3,
+      cursor: enabled ? "pointer" : "not-allowed",
       flexShrink: 0,
       padding: 0,
+      animation: active ? "bss-spin 1.2s linear infinite" : undefined,
+    }),
+    cloneDeleteBtn: {
+      width: 22,
+      height: 22,
+      borderRadius: "50%",
+      background: "transparent",
+      border: "none",
+      color: C.muted3,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontSize: 11,
+      cursor: "pointer",
+      flexShrink: 0,
+      padding: 0,
+    },
+    cloneBadge: {
+      fontSize: 10,
+      color: C.purpleLt,
+      marginTop: 1,
     },
     cloneSection: {
       borderTop: `1px solid ${C.borderSoft}`,
@@ -368,21 +540,26 @@ export function StudioPage() {
       color: C.muted3,
       marginBottom: 6,
     },
+    cloneHint: {
+      fontSize: 10,
+      color: C.muted3,
+      marginTop: 6,
+    },
     cloneRow: {
       display: "flex",
       gap: 6,
     },
-    cloneBtn: {
+    cloneBtn: (busy: boolean, rec: boolean) => ({
       flex: 1,
       padding: "5px 0",
-      background: C.panel2,
-      border: `1px solid ${C.border}`,
+      background: rec ? "rgba(255,124,163,.14)" : C.panel2,
+      border: `1px solid ${rec ? C.pink : C.border}`,
       borderRadius: 6,
-      color: C.muted,
+      color: rec ? C.pink : C.muted,
       fontSize: 11,
-      cursor: "not-allowed",
-      opacity: 0.5,
-    },
+      cursor: busy ? "not-allowed" : "pointer",
+      opacity: busy && !rec ? 0.5 : 1,
+    }),
 
     // CENTER PANEL
     centerPanel: {
@@ -701,6 +878,8 @@ export function StudioPage() {
             {filteredVoices.map((v, i) => {
               const realIdx = voices.indexOf(v);
               const selected = v.id === voice;
+              const isPreviewing = previewing === v.id;
+              const previewEnabled = status === "ready" && (!previewing || isPreviewing);
               return (
                 <div
                   key={v.id}
@@ -717,43 +896,102 @@ export function StudioPage() {
                     <div style={$.voiceNameText}>{v.label}</div>
                     <div style={$.voiceDesc}>Giọng AI · Tiếng Việt</div>
                   </div>
-                  {/* TODO: nghe thử giọng (chưa hỗ trợ) */}
                   <button
-                    style={$.voicePreviewBtn}
-                    title="TODO: nghe thử giọng (chưa hỗ trợ)"
-                    disabled
-                    onClick={(e) => e.stopPropagation()}
+                    style={$.voicePreviewBtn(previewEnabled, isPreviewing)}
+                    title={status === "ready" ? "Nghe thử giọng" : "Máy chủ chưa sẵn sàng"}
+                    disabled={!previewEnabled}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void preview({ voiceId: v.id });
+                    }}
                   >
-                    ▶
+                    {isPreviewing ? "⟳" : "▶"}
                   </button>
                 </div>
               );
             })}
-            {filteredVoices.length === 0 && (
+
+            {/* Cloned voices */}
+            {filteredClones.map((cv) => {
+              const selected = cv.id === voice;
+              const isPreviewing = previewing === cv.id;
+              const previewEnabled = status === "ready" && (!previewing || isPreviewing);
+              return (
+                <div
+                  key={cv.id}
+                  style={$.voiceRow(selected)}
+                  onClick={() => setVoice(cv.id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => e.key === "Enter" && setVoice(cv.id)}
+                >
+                  <div style={$.voiceAvatar(0)}>{cv.name.charAt(0).toUpperCase()}</div>
+                  <div style={$.voiceName}>
+                    <div style={$.voiceNameText}>{cv.name}</div>
+                    <div style={$.cloneBadge}>đã nhân bản</div>
+                  </div>
+                  <button
+                    style={$.voicePreviewBtn(previewEnabled, isPreviewing)}
+                    title={status === "ready" ? "Nghe thử giọng" : "Máy chủ chưa sẵn sàng"}
+                    disabled={!previewEnabled}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void preview({ clone: cv });
+                    }}
+                  >
+                    {isPreviewing ? "⟳" : "▶"}
+                  </button>
+                  <button
+                    style={$.cloneDeleteBtn}
+                    title="Xóa giọng nhân bản"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteClone(cv);
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.color = C.coral; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = C.muted3; }}
+                  >
+                    🗑
+                  </button>
+                </div>
+              );
+            })}
+
+            {filteredVoices.length === 0 && filteredClones.length === 0 && (
               <div style={{ padding: "12px", fontSize: 12, color: C.muted3, textAlign: "center" }}>
                 Không tìm thấy giọng nào
               </div>
             )}
           </div>
-          {/* Clone section — TODO: nhân bản giọng (chưa hỗ trợ) */}
+          {/* Clone section */}
           <div style={$.cloneSection}>
             <div style={$.cloneSectionHdr}>Nhân bản giọng</div>
             <div style={$.cloneRow}>
               <button
-                style={$.cloneBtn}
-                title="TODO: nhân bản giọng (chưa hỗ trợ)"
-                disabled
+                style={$.cloneBtn(cloning, recording)}
+                title={recording ? "Bấm để dừng ghi" : "Ghi âm giọng mẫu"}
+                disabled={cloning}
+                onClick={() => void toggleRecord()}
               >
-                🎤 Ghi âm
+                {recording ? "⏺ Đang ghi… (bấm để dừng)" : "🎤 Ghi âm"}
               </button>
               <button
-                style={$.cloneBtn}
-                title="TODO: nhân bản giọng (chưa hỗ trợ)"
-                disabled
+                style={$.cloneBtn(cloning || recording, false)}
+                title="Tải lên tệp âm thanh mẫu"
+                disabled={cloning || recording}
+                onClick={() => fileInputRef.current?.click()}
               >
                 📁 Tải lên
               </button>
             </div>
+            <div style={$.cloneHint}>Ghi 3–5 giây giọng mẫu</div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="audio/*"
+              style={{ display: "none" }}
+              onChange={onUploadFile}
+            />
           </div>
         </div>
 
@@ -839,14 +1077,16 @@ export function StudioPage() {
         <div style={$.rightPanel}>
           {/* Voice header */}
           <div style={$.voiceHeaderRow}>
-            <div style={$.voiceHeaderAvatar(selectedVoiceIdx < 0 ? 0 : selectedVoiceIdx)}>
-              {(selectedVoice?.label ?? "?").charAt(0).toUpperCase()}
+            <div style={$.voiceHeaderAvatar(selectedClone ? 0 : selectedVoiceIdx < 0 ? 0 : selectedVoiceIdx)}>
+              {(voiceLabel || "?").charAt(0).toUpperCase()}
             </div>
             <div>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#d4d4d4" }}>
-                {selectedVoice?.label ?? "Chưa chọn giọng"}
+                {selectedClone ? selectedClone.name : selectedVoice?.label ?? "Chưa chọn giọng"}
               </div>
-              <div style={{ fontSize: 11, color: C.muted3, marginTop: 2 }}>Giọng AI · Tiếng Việt</div>
+              <div style={{ fontSize: 11, color: selectedClone ? C.purpleLt : C.muted3, marginTop: 2 }}>
+                {selectedClone ? "Giọng nhân bản · Tiếng Việt" : "Giọng AI · Tiếng Việt"}
+              </div>
             </div>
           </div>
 
@@ -900,7 +1140,7 @@ export function StudioPage() {
             <button
               style={status === "ready" ? $.generateBtn : $.generateBtnDisabled}
               disabled={status !== "ready"}
-              onClick={generate}
+              onClick={() => void generate()}
               onMouseEnter={(e) => { if (status === "ready") e.currentTarget.style.background = C.purpleLt; }}
               onMouseLeave={(e) => { if (status === "ready") e.currentTarget.style.background = C.purple; }}
             >
@@ -909,7 +1149,7 @@ export function StudioPage() {
             <button
               style={$.addBtn}
               disabled={status !== "ready"}
-              onClick={generate}
+              onClick={() => void generate()}
               title="Thêm vào hàng đợi"
             >
               +

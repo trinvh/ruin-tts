@@ -77,3 +77,15 @@ export async function cloneVoice(file: Blob, filename = "ref.wav"): Promise<{ re
   if (!r.ok) throw new Error(`clone ${r.status}: ${await r.text().catch(() => "")}`);
   return r.json();
 }
+
+/// Synthesize synchronously and return the audio blob (used for quick voice
+/// previews — `/v1/tts` returns the encoded audio directly, no job needed).
+export async function synthDirect(p: SynthParams): Promise<Blob> {
+  const r = await fetch(`${await base()}/v1/tts`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(p),
+  });
+  if (!r.ok) throw new Error(`tts ${r.status}: ${await r.text().catch(() => "")}`);
+  return r.blob();
+}
