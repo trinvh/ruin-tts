@@ -27,6 +27,24 @@ export async function defaultOutputDir(): Promise<string | null> {
   return invokeSafe<string>("default_output_dir");
 }
 
+export type FfmpegStatus = { available: boolean; bundled: boolean; system: boolean; downloadable: boolean };
+
+export async function ffmpegStatus(): Promise<FfmpegStatus | null> {
+  return invokeSafe<FfmpegStatus>("ffmpeg_status");
+}
+
+/** Download a static ffmpeg into the app dir (Tauri only). Throws on failure. */
+export async function downloadFfmpeg(): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("download_ffmpeg");
+}
+
+/** Base URL of the media-ai sidecar (matches studio's default media_ai_base). */
+export function mediaAiBase(): string {
+  return "http://127.0.0.1:8099";
+}
+
 /// Copy a server-generated file to a destination on disk (Tauri only).
 export async function copyFile(src: string, dest: string): Promise<boolean> {
   if (!isTauri()) return false;

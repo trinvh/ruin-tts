@@ -4,6 +4,21 @@
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
+/// The ffmpeg binary to invoke: `FFMPEG_PATH` if it points at an existing file
+/// (e.g. one the app downloaded during onboarding), else `ffmpeg` from PATH.
+pub fn ffmpeg_bin() -> String {
+    bin_from_env("FFMPEG_PATH", "ffmpeg")
+}
+pub fn ffprobe_bin() -> String {
+    bin_from_env("FFPROBE_PATH", "ffprobe")
+}
+fn bin_from_env(var: &str, fallback: &str) -> String {
+    match std::env::var(var) {
+        Ok(p) if !p.is_empty() && Path::new(&p).exists() => p,
+        _ => fallback.to_string(),
+    }
+}
+
 /// Settings for ducking the background music bed under the voice.
 #[derive(Debug, Clone, Copy)]
 pub struct DuckSettings {
@@ -426,7 +441,7 @@ fn blur_filterchain(x: f64, y: f64, w: f64, h: f64, frame: Option<(u32, u32)>) -
 /// Check whether a given ffmpeg filter (e.g. `subtitles`) is available in the
 /// installed build — used to decide burn-in vs. soft-subtitle fallback.
 pub async fn has_filter(name: &str) -> bool {
-    match tokio::process::Command::new("ffmpeg")
+    match tokio::process::Command::new(ffmpeg_bin())
         .args(["-hide_banner", "-filters"])
         .output()
         .await
@@ -553,7 +568,7 @@ pub fn parse_duration(stdout: &str) -> Result<f64> {
 /// so a failure (bad input, or a broken ffmpeg/dyld install) surfaces in the
 /// run's error instead of only the console.
 pub async fn run_ffmpeg(args: &[String]) -> Result<()> {
-    let out = tokio::process::Command::new("ffmpeg")
+    let out = tokio::process::Command::new(ffmpeg_bin())
         .args(["-hide_banner", "-nostats", "-loglevel", "error"])
         .args(args)
         .kill_on_drop(true) // a cancelled run drops this future → kill ffmpeg
@@ -579,7 +594,7 @@ pub async fn run_ffmpeg(args: &[String]) -> Result<()> {
 /// Probe a media file's key info (duration, size, video/audio codec, resolution,
 /// fps) via `ffprobe`, returned as a trimmed JSON object for the UI.
 pub async fn probe_media_info(path: &Path) -> Result<serde_json::Value> {
-    let out = tokio::process::Command::new("ffprobe")
+    let out = tokio::process::Command::new(ffprobe_bin())
         .args([
             "-v",
             "error",
@@ -643,7 +658,7 @@ pub async fn probe_media_info(path: &Path) -> Result<serde_json::Value> {
 
 /// Probe a video's pixel size `(width, height)` (first video stream).
 pub async fn probe_video_dimensions(path: &Path) -> Result<(u32, u32)> {
-    let out = tokio::process::Command::new("ffprobe")
+    let out = tokio::process::Command::new(ffprobe_bin())
         .args([
             "-v",
             "error",
@@ -668,7 +683,7 @@ pub async fn probe_video_dimensions(path: &Path) -> Result<(u32, u32)> {
 
 /// Probe a video's pixel height (first video stream), for subtitle positioning.
 pub async fn probe_video_height(path: &Path) -> Result<u32> {
-    let out = tokio::process::Command::new("ffprobe")
+    let out = tokio::process::Command::new(ffprobe_bin())
         .args([
             "-v",
             "error",
@@ -691,7 +706,7 @@ pub async fn probe_video_height(path: &Path) -> Result<u32> {
 
 /// Probe a media file's duration in seconds (requires `ffprobe` on PATH).
 pub async fn probe_duration(path: &Path) -> Result<f64> {
-    let out = tokio::process::Command::new("ffprobe")
+    let out = tokio::process::Command::new(ffprobe_bin())
         .args(ffprobe_duration_args(path))
         .output()
         .await

@@ -5,18 +5,22 @@ import { Icon } from "./icons";
 import { HoverBox } from "./ui";
 import { Home, type RecentItem } from "./Home";
 import { DubList, type DubListItem } from "./DubList";
+import { Onboarding } from "./Onboarding";
 import { VideoStudio } from "./videostudio/VideoStudio";
 import { FEATURE_ICON, FEATURE_TITLE, routeFor, type FeatureKey, type Tab } from "./tabs";
 import { createDubProject, listDubProjects, type DubProject } from "../studioApi";
-import { pickVideoFile } from "../platform";
+import { isTauri, pickVideoFile } from "../platform";
 
 let UID = 0;
+const ONBOARDED_KEY = "beesoft.onboarded";
 
 export function StudioShell() {
   const navigate = useNavigate();
   const [tabs, setTabs] = useState<Tab[]>([{ id: "home", kind: "home" }]);
   const [activeId, setActiveId] = useState("home");
   const [projects, setProjects] = useState<DubProject[]>([]);
+  // First-launch onboarding (only in the packaged app).
+  const [onboarded, setOnboarded] = useState(() => !isTauri() || localStorage.getItem(ONBOARDED_KEY) === "1");
 
   useEffect(() => injectStudioStyles(), []);
 
@@ -123,6 +127,17 @@ export function StudioShell() {
 
   const projectTabs = tabs.filter((t) => t.kind === "project");
   const isOverlay = active.kind === "home" || active.kind === "dub" || active.kind === "project";
+
+  if (!onboarded) {
+    return (
+      <Onboarding
+        onDone={() => {
+          localStorage.setItem(ONBOARDED_KEY, "1");
+          setOnboarded(true);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="bss" style={{ height: "100vh", width: "100vw", display: "flex", flexDirection: "column", background: C.appBg, color: "#fff", fontFamily: FONT, fontSize: 13, overflow: "hidden", WebkitFontSmoothing: "antialiased" }}>
