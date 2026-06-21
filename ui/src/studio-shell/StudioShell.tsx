@@ -9,18 +9,44 @@ import { Onboarding } from "./Onboarding";
 import { VideoStudio } from "./videostudio/VideoStudio";
 import { FEATURE_ICON, FEATURE_TITLE, routeFor, type FeatureKey, type Tab } from "./tabs";
 import { createDubProject, listDubProjects, type DubProject } from "../studioApi";
-import { isTauri, pickVideoFile } from "../platform";
+import { ffmpegStatus, isTauri, mediaAiBase, pickVideoFile, serverBase, studioBase } from "../platform";
 
 let UID = 0;
-const ONBOARDED_KEY = "beesoft.onboarded";
+type Gate = "checking" | "onboard" | "app";
 
 export function StudioShell() {
   const navigate = useNavigate();
   const [tabs, setTabs] = useState<Tab[]>([{ id: "home", kind: "home" }]);
   const [activeId, setActiveId] = useState("home");
   const [projects, setProjects] = useState<DubProject[]>([]);
-  // First-launch onboarding (only in the packaged app).
-  const [onboarded, setOnboarded] = useState(() => !isTauri() || localStorage.getItem(ONBOARDED_KEY) === "1");
+  // Show onboarding whenever the app isn't fully ready (ffmpeg + the 3 sidecars
+  // up) — not just on first launch. A ready app skips straight in; a still-
+  // downloading or partially-up one gets guided. (Web build: always "app".)
+  const [gate, setGate] = useState<Gate>(() => (isTauri() ? "checking" : "app"));
+  useEffect(() => {
+    if (!isTauri()) return;
+    let alive = true;
+    const ping = async (u: string | null) => {
+      if (!u) return false;
+      try {
+        return (await fetch(u, { cache: "no-store" })).ok;
+      } catch {
+        return false;
+      }
+    };
+    void (async () => {
+      const [ff, t, s] = await Promise.all([ffmpegStatus(), serverBase(), studioBase()]);
+      const [tts, studio, media] = await Promise.all([
+        ping(t ? `${t}/health` : null),
+        ping(s ? `${s}/health` : null),
+        ping(`${mediaAiBase()}/health`),
+      ]);
+      if (alive) setGate(!!ff?.available && tts && studio && media ? "app" : "onboard");
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => injectStudioStyles(), []);
 
@@ -128,15 +154,9 @@ export function StudioShell() {
   const projectTabs = tabs.filter((t) => t.kind === "project");
   const isOverlay = active.kind === "home" || active.kind === "dub" || active.kind === "project";
 
-  if (!onboarded) {
-    return (
-      <Onboarding
-        onDone={() => {
-          localStorage.setItem(ONBOARDED_KEY, "1");
-          setOnboarded(true);
-        }}
-      />
-    );
+  if (gate === "checking") return null; // dark native window bg while probing
+  if (gate === "onboard") {
+    return <Onboarding onDone={() => setGate("app")} />;
   }
 
   return (
