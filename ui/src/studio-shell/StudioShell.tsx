@@ -35,11 +35,11 @@ export function StudioShell() {
       }
     };
     void (async () => {
-      const [ff, t, s] = await Promise.all([ffmpegStatus(), serverBase(), studioBase()]);
+      const [ff, t, s, m] = await Promise.all([ffmpegStatus(), serverBase(), studioBase(), mediaAiBase()]);
       const [tts, studio, media] = await Promise.all([
         ping(t ? `${t}/health` : null),
         ping(s ? `${s}/health` : null),
-        ping(`${mediaAiBase()}/health`),
+        ping(m ? `${m}/health` : null),
       ]);
       if (alive) setGate(!!ff?.available && tts && studio && media ? "app" : "onboard");
     })();

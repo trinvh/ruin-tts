@@ -13,21 +13,50 @@ use tauri::{Manager, RunEvent};
 const FFMPEG_NAME: &str = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
 const FFPROBE_NAME: &str = if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" };
 
-const TTS_ADDR: &str = "127.0.0.1:8080";
-const STUDIO_ADDR: &str = "127.0.0.1:8090";
-const MEDIA_AI_ADDR: &str = "127.0.0.1:8099";
+// Fallback ports if the OS can't hand out an ephemeral one (it always can).
+const TTS_FALLBACK: u16 = 8080;
+const STUDIO_FALLBACK: u16 = 8090;
+const MEDIA_AI_FALLBACK: u16 = 8099;
 
 #[derive(Default)]
 struct Children(Mutex<Vec<Child>>);
 
-#[tauri::command]
-fn server_base() -> String {
-    format!("http://{TTS_ADDR}")
+/// The actual base URLs the sidecars bound to (ports are picked at runtime to
+/// avoid clashing with anything already on the fixed ports). The frontend reads
+/// these via the commands below instead of hard-coding ports.
+#[derive(Default)]
+struct Bases(Mutex<BaseUrls>);
+
+#[derive(Default, Clone)]
+struct BaseUrls {
+    tts: String,
+    studio: String,
+    media: String,
+}
+
+/// Bind an ephemeral port (`:0`), read what the OS gave us, release it, and
+/// return `127.0.0.1:<port>`. Tiny TOCTOU window before the sidecar rebinds it,
+/// acceptable for localhost dev. Falls back to a fixed port if binding fails.
+fn pick_addr(fallback: u16) -> String {
+    match std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()) {
+        Ok(a) => format!("127.0.0.1:{}", a.port()),
+        Err(_) => format!("127.0.0.1:{fallback}"),
+    }
 }
 
 #[tauri::command]
-fn studio_base() -> String {
-    format!("http://{STUDIO_ADDR}")
+fn server_base(bases: tauri::State<Bases>) -> String {
+    bases.0.lock().unwrap().tts.clone()
+}
+
+#[tauri::command]
+fn studio_base(bases: tauri::State<Bases>) -> String {
+    bases.0.lock().unwrap().studio.clone()
+}
+
+#[tauri::command]
+fn media_ai_base(bases: tauri::State<Bases>) -> String {
+    bases.0.lock().unwrap().media.clone()
 }
 
 #[tauri::command]
@@ -163,9 +192,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Children::default())
+        .manage(Bases::default())
         .invoke_handler(tauri::generate_handler![
             server_base,
             studio_base,
+            media_ai_base,
             default_output_dir,
             copy_file,
             ffmpeg_status,
@@ -173,11 +204,25 @@ pub fn run() {
         ])
         .setup(|app| {
             let mut kids = Vec::new();
+            // Pick a free port per sidecar so launching never clashes with a
+            // stale/other instance on the fixed ports. The frontend learns the
+            // ports via server_base/studio_base/media_ai_base.
+            let tts_addr = pick_addr(TTS_FALLBACK);
+            let studio_addr = pick_addr(STUDIO_FALLBACK);
+            let media_addr = pick_addr(MEDIA_AI_FALLBACK);
+            *app.state::<Bases>().0.lock().unwrap() = BaseUrls {
+                tts: format!("http://{tts_addr}"),
+                studio: format!("http://{studio_addr}"),
+                media: format!("http://{media_addr}"),
+            };
             // Point studio-server at the app-managed ffmpeg (used iff it exists —
             // see media::ffmpeg_bin); a download during onboarding makes it appear.
             let (ff, fp) = ffmpeg_paths(app.handle());
             std::env::set_var("FFMPEG_PATH", &ff);
             std::env::set_var("FFPROBE_PATH", &fp);
+            // studio-server talks to media-ai over this base (its config default
+            // is overridden by MEDIA_AI_BASE — see studio main).
+            std::env::set_var("MEDIA_AI_BASE", format!("http://{media_addr}"));
             // On Intel macOS, ort loads ONNX Runtime dynamically — point the
             // sidecars at the bundled dylib if present (no-op on arm64 / Windows
             // where ort is linked statically).
@@ -187,10 +232,10 @@ pub fn run() {
                     std::env::set_var("ORT_DYLIB_PATH", &dylib);
                 }
             }
-            if let Some(c) = spawn("VIENEU_SERVER_BIN", "vieneu-server", &["--addr", TTS_ADDR, "--workers", "2"]) {
+            if let Some(c) = spawn("VIENEU_SERVER_BIN", "vieneu-server", &["--addr", &tts_addr, "--workers", "2"]) {
                 kids.push(c);
             } else {
-                eprintln!("[tauri] vieneu-server not found — start it manually on {TTS_ADDR}");
+                eprintln!("[tauri] vieneu-server not found — start it manually on {tts_addr}");
             }
             // A bundled app's CWD is `/` (macOS) — give studio-server absolute
             // db + work paths under the OS app-data dir so it doesn't write junk.
@@ -201,18 +246,18 @@ pub fn run() {
             let _ = std::fs::create_dir_all(&data_dir);
             let db = data_dir.join("studio.db").to_string_lossy().into_owned();
             let work = data_dir.join("studio-work").to_string_lossy().into_owned();
-            // studio-server inherits RUIN_API_KEY / VIENEU_BASE / YT_* from the env.
-            if let Some(c) = spawn("STUDIO_SERVER_BIN", "studio-server", &["--addr", STUDIO_ADDR, "--db", &db, "--work-dir", &work]) {
+            // studio-server inherits RUIN_API_KEY / VIENEU_BASE / YT_* / MEDIA_AI_BASE.
+            if let Some(c) = spawn("STUDIO_SERVER_BIN", "studio-server", &["--addr", &studio_addr, "--db", &db, "--work-dir", &work]) {
                 kids.push(c);
             } else {
-                eprintln!("[tauri] studio-server not found — start it manually on {STUDIO_ADDR}");
+                eprintln!("[tauri] studio-server not found — start it manually on {studio_addr}");
             }
             // media-ai (ASR + diarization + age/gender) — downloads its models on
             // first run. Optional age/gender model via MEDIA_AI_AGEGENDER_* env.
-            if let Some(c) = spawn("MEDIA_AI_BIN", "media-ai", &["--addr", MEDIA_AI_ADDR]) {
+            if let Some(c) = spawn("MEDIA_AI_BIN", "media-ai", &["--addr", &media_addr]) {
                 kids.push(c);
             } else {
-                eprintln!("[tauri] media-ai not found — dubbing analysis unavailable on {MEDIA_AI_ADDR}");
+                eprintln!("[tauri] media-ai not found — dubbing analysis unavailable on {media_addr}");
             }
             *app.state::<Children>().0.lock().unwrap() = kids;
             Ok(())

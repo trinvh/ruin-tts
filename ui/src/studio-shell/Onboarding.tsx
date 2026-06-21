@@ -45,11 +45,11 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     if (step !== "models") return;
     let alive = true;
     const tick = async () => {
-      const [t, s] = await Promise.all([serverBase(), studioBase()]);
+      const [t, s, m] = await Promise.all([serverBase(), studioBase(), mediaAiBase()]);
       const [tts, studio, mediaAi] = await Promise.all([
         t ? ping(`${t}/health`) : Promise.resolve(false),
         s ? ping(`${s}/health`) : Promise.resolve(false),
-        ping(`${mediaAiBase()}/health`),
+        m ? ping(`${m}/health`) : Promise.resolve(false),
       ]);
       if (!alive) return;
       setReady({ tts, studio, mediaAi });

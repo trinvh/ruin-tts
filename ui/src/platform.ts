@@ -40,9 +40,9 @@ export async function downloadFfmpeg(): Promise<void> {
   await invoke("download_ffmpeg");
 }
 
-/** Base URL of the media-ai sidecar (matches studio's default media_ai_base). */
-export function mediaAiBase(): string {
-  return "http://127.0.0.1:8099";
+/** Base URL of the media-ai sidecar (port chosen at runtime by the shell). */
+export async function mediaAiBase(): Promise<string | null> {
+  return invokeSafe<string>("media_ai_base");
 }
 
 /// Copy a server-generated file to a destination on disk (Tauri only).

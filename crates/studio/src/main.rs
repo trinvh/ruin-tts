@@ -44,10 +44,17 @@ async fn main() -> Result<()> {
     let db = Db::connect(&args.db).await?;
 
     // Load persisted config (from the Settings page), else defaults.
-    let config: AppConfig = match db.load_config_json().await? {
+    let mut config: AppConfig = match db.load_config_json().await? {
         Some(json) => serde_json::from_str(&json).unwrap_or_default(),
         None => AppConfig::default(),
     };
+    // When launched by the desktop app, media-ai runs on a dynamically-chosen
+    // port passed via MEDIA_AI_BASE — let it override the stored/default base.
+    if let Ok(base) = std::env::var("MEDIA_AI_BASE") {
+        if !base.is_empty() {
+            config.media_ai_base = base;
+        }
+    }
     if config.ruin_key.is_empty() {
         tracing::warn!("Ruin API key not set — configure it in the app's Settings page");
     }
