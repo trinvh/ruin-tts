@@ -23,12 +23,21 @@ pub fn load_wav_16k_mono(path: &str) -> Result<Vec<f32>> {
                 .collect()
         }
     };
-    if channels > 1 {
-        Ok(interleaved
-            .chunks(channels)
-            .map(|c| c.iter().sum::<f32>() / channels as f32)
-            .collect())
-    } else {
-        Ok(interleaved)
+    Ok(downmix(interleaved, channels))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn downmix_averages_stereo_to_mono() {
+        // interleaved L,R: [1,3, 2,4] → [(1+3)/2, (2+4)/2] = [2, 3]
+        assert_eq!(downmix(vec![1.0, 3.0, 2.0, 4.0], 2), vec![2.0, 3.0]);
+    }
+
+    #[test]
+    fn downmix_passes_mono_through() {
+        assert_eq!(downmix(vec![0.5, -0.5, 0.25], 1), vec![0.5, -0.5, 0.25]);
     }
 }
