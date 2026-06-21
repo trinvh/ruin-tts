@@ -1,15 +1,20 @@
+import { useEffect, useState } from "react";
 import { C, FONT, MONO } from "../theme";
 import { Icon, type IconName } from "../icons";
-import { SUBC } from "./constants";
+import { SUBC, trackLabel } from "./constants";
 import { segIdOfClip } from "./seed";
+import { trackAudioKind, type TrackCtl } from "./trackmap";
 import type { StudioActions, StudioState } from "./useStudio";
 import type { DubProjectHook } from "./useDubProject";
+import type { Transport } from "./useTransport";
 import type { Clip } from "./types";
 
 interface Props {
   state: StudioState;
   actions: StudioActions;
   dub: DubProjectHook;
+  transport: Transport;
+  trackCtl: TrackCtl;
 }
 
 const SECTION: React.CSSProperties = { fontSize: 11, fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase", color: C.muted2, marginBottom: 13 };
@@ -48,8 +53,10 @@ function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
 
 const Divider = () => <div style={{ height: 1, background: C.border, margin: "18px 0" }} />;
 
-export function Inspector({ state, actions, dub }: Props) {
-  const sel = state.clips.find((c: Clip) => c.id === state.sel) ?? null;
+export function Inspector({ state, actions, dub, transport, trackCtl }: Props) {
+  const isTrack = !!state.sel?.startsWith("track:");
+  const trackKey = isTrack ? state.sel!.slice(6) : null;
+  const sel = !isTrack ? (state.clips.find((c: Clip) => c.id === state.sel) ?? null) : null;
   const subSegId = sel && sel.type === "sub" && sel.id.startsWith("svi_") ? segIdOfClip(sel.id) : null;
   const commitSub = (text: string) => {
     if (!subSegId) return;
@@ -62,7 +69,14 @@ export function Inspector({ state, actions, dub }: Props) {
   let tile: string = C.panel3;
   let color: string = C.muted;
   let icon: IconName = "film";
-  if (sel) {
+  if (trackKey) {
+    const ak = trackAudioKind(trackKey);
+    name = trackLabel(trackKey, state.clips.some((c) => c.track === "A1" && c.kind === "vocals"));
+    kind = "Track";
+    icon = ak === "sub" ? "subtitle" : "speaker";
+    tile = ak === "original" ? "rgba(101,176,246,.16)" : "rgba(146,136,224,.16)";
+    color = ak === "original" ? C.blue : C.purpleLt;
+  } else if (sel) {
     name = sel.name;
     if (sel.type === "video") { kind = "Video · " + sel.dur.toFixed(1) + "s"; tile = "rgba(234,124,105,.16)"; color = C.coral; icon = "film"; }
     else if (sel.type === "image") { kind = "Hình ảnh"; tile = "rgba(101,176,246,.16)"; color = C.blue; icon = "image"; }
@@ -83,13 +97,15 @@ export function Inspector({ state, actions, dub }: Props) {
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
-        {!sel && (
+        {trackKey && <TrackPanel trackKey={trackKey} dub={dub} transport={transport} trackCtl={trackCtl} />}
+
+        {!sel && !isTrack && (
           <div style={{ textAlign: "center", padding: "36px 10px", color: C.muted3 }}>
             <svg viewBox="0 0 24 24" width={30} height={30} fill="none" stroke="currentColor" strokeWidth={1.5} style={{ marginBottom: 12 }}>
               <path d="M12 3 2 8.5 12 14l10-5.5z" />
               <path d="M2 8.5V16l10 5.5L22 16V8.5" />
             </svg>
-            <div style={{ fontSize: 13, lineHeight: 1.5 }}>Chọn một clip trên timeline<br />để chỉnh sửa thuộc tính.</div>
+            <div style={{ fontSize: 13, lineHeight: 1.5 }}>Chọn một clip trên timeline để chỉnh sửa,<br />hoặc bấm tên track để chỉnh cả track.</div>
           </div>
         )}
 
@@ -165,6 +181,69 @@ export function Inspector({ state, actions, dub }: Props) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function TrackPanel({ trackKey, dub, transport, trackCtl }: { trackKey: string; dub: DubProjectHook; transport: Transport; trackCtl: TrackCtl }) {
+  const ak = trackAudioKind(trackKey);
+  const enabled = trackCtl.enabled(trackKey);
+
+  if (ak === "original" || ak === "vn") {
+    return (
+      <>
+        <div style={SECTION}>Âm lượng track</div>
+        <TrackVolume kind={ak} value0={trackCtl.volume(trackKey) ?? 0} transport={transport} onCommit={(v) => trackCtl.setVolume(trackKey, v)} />
+        <Divider />
+        <RowToggle label="Bật track" sub={ak === "original" ? "Nghe + trộn tiếng gốc khi xuất" : "Nghe + trộn giọng lồng tiếng khi xuất"} on={enabled} onClick={() => trackCtl.toggle(trackKey)} />
+      </>
+    );
+  }
+  if (ak === "sub") {
+    return (
+      <>
+        <div style={SECTION}>Phụ đề Việt</div>
+        <RowToggle label="Ghi vào video" sub="Hiện ở preview & in cứng vào video khi xuất" on={enabled} onClick={() => trackCtl.toggle(trackKey)} />
+        {!dub.detail?.project.vn_track_path && <div style={{ fontSize: 10.5, color: C.muted3, marginTop: 12 }}>Phụ đề lấy từ bản dịch của từng câu.</div>}
+      </>
+    );
+  }
+  return <div style={{ fontSize: 13, color: C.muted3, lineHeight: 1.5 }}>Track này không có cấu hình âm lượng.</div>;
+}
+
+function TrackVolume({ kind, value0, transport, onCommit }: { kind: "original" | "vn"; value0: number; transport: Transport; onCommit: (v: number) => void }) {
+  const [v, setV] = useState(Math.round(value0 * 100));
+  useEffect(() => setV(Math.round(value0 * 100)), [value0]);
+  const apply = (n: number) => (kind === "original" ? transport.setOrigVolume(n / 100) : transport.setVnVolume(n / 100));
+  const fill = `linear-gradient(to right,${C.coral} ${v}%,${C.border} ${v}%)`;
+  const commit = (e: React.PointerEvent<HTMLInputElement> | React.MouseEvent<HTMLInputElement>) =>
+    onCommit(Number((e.currentTarget as HTMLInputElement).value) / 100);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 13 }}>
+      <span style={{ width: 58, flex: "none", fontSize: 12, color: C.steel }}>Âm lượng</span>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={v}
+        onChange={(e) => { const n = Number(e.target.value); setV(n); apply(n); }}
+        onPointerUp={commit}
+        onMouseUp={commit}
+        style={{ flex: 1, background: fill }}
+      />
+      <span style={{ width: 42, textAlign: "right", color: "#fff", fontFamily: MONO, fontSize: 12 }}>{v}</span>
+    </div>
+  );
+}
+
+function RowToggle({ label, sub, on, onClick }: { label: string; sub: string; on: boolean; onClick: () => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+      <div>
+        <div style={{ fontSize: 12, color: C.steel }}>{label}</div>
+        <div style={{ fontSize: 10.5, color: C.muted3, marginTop: 1 }}>{sub}</div>
+      </div>
+      <Toggle on={on} onClick={onClick} />
     </div>
   );
 }

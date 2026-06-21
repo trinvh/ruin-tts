@@ -28,6 +28,8 @@ pub struct DubProject {
     pub language: Option<String>,
     pub gemini_model: String,
     pub original_volume: f64,
+    /// Volume of the Vietnamese dub track (0..1) when muxing the export.
+    pub vn_volume: f64,
     pub speed_cap: f64,
     /// Burn the Vietnamese subtitles into the exported video.
     pub burn_subtitles: bool,

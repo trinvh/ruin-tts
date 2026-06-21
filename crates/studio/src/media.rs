@@ -344,6 +344,8 @@ fn escape_filter_path(p: &Path) -> String {
 /// Options for the final dub export.
 pub struct ExportOpts<'a> {
     pub original_volume: f64,
+    /// Volume of the Vietnamese dub track (0..1).
+    pub vn_volume: f64,
     /// Burn this SRT into the video via libass (re-encodes). Requires the
     /// `subtitles` filter; only set when [`has_filter`] confirms it.
     pub subtitles_burn: Option<&'a Path>,
@@ -412,8 +414,9 @@ pub async fn has_filter(name: &str) -> bool {
 /// video stream is copied unless a video filter (blur/burn) forces a re-encode.
 pub fn export_video_args(video: &Path, voice: &Path, out: &Path, opts: &ExportOpts) -> Vec<String> {
     let audio_fc = format!(
-        "[0:a]volume={ov:.3}[orig];[orig][1:a]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]",
+        "[0:a]volume={ov:.3}[orig];[1:a]volume={vv:.3}[vn];[orig][vn]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]",
         ov = opts.original_volume.clamp(0.0, 1.0),
+        vv = opts.vn_volume.clamp(0.0, 1.0),
     );
 
     // Video filter chain (only when blur or burned subtitles are requested).
@@ -818,6 +821,7 @@ mod tests {
     fn export_no_filters_copies_video() {
         let o = ExportOpts {
             original_volume: 0.2,
+            vn_volume: 1.0,
             subtitles_burn: None,
             subtitles_soft: None,
             sub_margin_v: None,
@@ -836,6 +840,7 @@ mod tests {
         let sub = p("/tmp/s.srt");
         let o = ExportOpts {
             original_volume: 0.2,
+            vn_volume: 1.0,
             subtitles_burn: Some(&sub),
             subtitles_soft: None,
             sub_margin_v: Some(60),
@@ -859,6 +864,7 @@ mod tests {
     fn export_blur_without_frame_uses_hard_edge_fallback() {
         let o = ExportOpts {
             original_volume: 0.2,
+            vn_volume: 1.0,
             subtitles_burn: None,
             subtitles_soft: None,
             sub_margin_v: None,
@@ -875,6 +881,7 @@ mod tests {
         let sub = p("/tmp/s.srt");
         let o = ExportOpts {
             original_volume: 0.2,
+            vn_volume: 1.0,
             subtitles_burn: None,
             subtitles_soft: Some(&sub),
             sub_margin_v: None,

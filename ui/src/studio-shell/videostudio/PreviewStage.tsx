@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { C, MONO } from "../theme";
 import { Icon } from "../icons";
 import { HoverBox } from "../ui";
@@ -26,16 +27,31 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
   const cur = segs.find((s) => t >= s.start_s && t < s.end_s);
   const capVi = cur?.text_vi?.trim() ?? "";
   const capZh = cur?.text_src?.trim() ?? "";
-  const showCaption = !!(capVi || capZh);
+  // The Vietnamese subtitle track (eye = burn_subtitles) gates preview + export.
+  const subsOn = dub.detail?.project.burn_subtitles ?? false;
+  const showCaption = subsOn && !!(capVi || capZh);
   const showCapZh = !!(subStyle.bilingual && capZh && capVi);
   const aspectCss = aspect === "9:16" ? "9 / 16" : aspect === "1:1" ? "1 / 1" : "16 / 9";
   const origVol = dub.detail?.project.original_volume ?? 1;
+  const vnVol = dub.detail?.project.vn_volume ?? 1;
 
   const onLoaded = () => {
     transport.onLoaded();
     transport.setOrigVolume(origVol);
-    transport.setVnMuted(false);
+    transport.setVnVolume(vnVol);
   };
+
+  // Keep live playback volumes in sync with the persisted track settings. Keyed
+  // on the value only (not `transport`, whose methods read live refs) so a
+  // playing video's re-renders don't stomp a live inspector drag.
+  useEffect(() => {
+    transport.setOrigVolume(origVol);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [origVol]);
+  useEffect(() => {
+    transport.setVnVolume(vnVol);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vnVol]);
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: C.previewBg }}>

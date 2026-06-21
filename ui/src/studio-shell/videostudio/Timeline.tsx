@@ -5,19 +5,21 @@ import { HoverBox } from "../ui";
 import { bars, clipColors, fmt, totalDur, TRACK_ORDER, trackDot, trackLabel } from "./constants";
 import type { StudioActions, StudioState } from "./useStudio";
 import type { Transport } from "./useTransport";
+import type { TrackCtl } from "./trackmap";
 import type { Clip } from "./types";
 
 interface Props {
   state: StudioState;
   actions: StudioActions;
   transport: Transport;
+  trackCtl: TrackCtl;
 }
 
 const stop = (e: React.MouseEvent) => e.stopPropagation();
 const toolBtn: React.CSSProperties = { height: 26, padding: "0 9px", border: "none", background: "transparent", borderRadius: 6, display: "flex", alignItems: "center", gap: 6, fontFamily: FONT, fontSize: 12 };
 const zoomBtn: React.CSSProperties = { width: 26, height: 26, border: "none", background: C.panel2, color: C.steel, borderRadius: 6, display: "grid", placeItems: "center", cursor: "pointer" };
 
-export function Timeline({ state, actions, transport }: Props) {
+export function Timeline({ state, actions, transport, trackCtl }: Props) {
   const { clips, sel } = state;
   const ph = transport.time;
   const TT = Math.max(transport.duration || 0, totalDur(clips));
@@ -60,17 +62,34 @@ export function Timeline({ state, actions, transport }: Props) {
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <div className="noscroll" style={{ width: 128, flex: "none", borderRight: `1px solid ${C.border}`, background: C.inset, overflowY: "hidden" }}>
           <div style={{ height: 26, borderBottom: `1px solid ${C.borderSoft}` }} />
-          {present.map((k) => (
-            <div key={k} style={{ height: 46, borderBottom: `1px solid ${C.borderSoft}`, display: "flex", alignItems: "center", padding: "0 8px 0 11px", gap: 5 }}>
-              <span style={{ width: 18, height: 18, flex: "none", borderRadius: 5, background: trackDot(k), display: "inline-block" }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 11.5, fontWeight: 600, color: C.ink5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{trackLabel(k, tachDone)}</div>
+          {present.map((k) => {
+            const selectedTrack = state.sel === "track:" + k;
+            const hasEye = trackCtl.hasEye(k);
+            const on = trackCtl.enabled(k);
+            return (
+              <div
+                key={k}
+                onClick={() => actions.selectTrack(k)}
+                style={{ height: 46, borderBottom: `1px solid ${C.borderSoft}`, display: "flex", alignItems: "center", padding: "0 8px 0 11px", gap: 5, cursor: "pointer", background: selectedTrack ? "rgba(234,124,105,.12)" : "transparent", boxShadow: selectedTrack ? `inset 2px 0 0 0 ${C.coral}` : "none" }}
+              >
+                <span style={{ width: 18, height: 18, flex: "none", borderRadius: 5, background: trackDot(k), display: "inline-block", opacity: on ? 1 : 0.35 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 600, color: on ? C.ink5 : C.muted4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{trackLabel(k, tachDone)}</div>
+                </div>
+                {hasEye && (
+                  <HoverBox
+                    as="button"
+                    title={on ? "Tắt track (preview + xuất)" : "Bật track"}
+                    onClick={(e: React.MouseEvent) => { e.stopPropagation(); trackCtl.toggle(k); }}
+                    style={{ width: 20, height: 20, border: "none", background: "transparent", color: on ? C.steel : C.muted5, opacity: on ? 1 : 0.5, borderRadius: 5, display: "grid", placeItems: "center", cursor: "pointer" }}
+                    hoverStyle={{ color: "#fff" }}
+                  >
+                    <Icon name="eye" size={12} stroke={1.8} />
+                  </HoverBox>
+                )}
               </div>
-              <HoverBox as="button" title="Ẩn/hiện" style={{ width: 20, height: 20, border: "none", background: "transparent", color: C.muted5, borderRadius: 5, display: "grid", placeItems: "center", cursor: "pointer" }} hoverStyle={{ color: C.steel }}>
-                <Icon name="eye" size={12} stroke={1.8} />
-              </HoverBox>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <div ref={(el) => actions.setLane(el)} onClick={() => actions.deselect()} style={{ flex: 1, position: "relative", overflowY: "auto", overflowX: "hidden", background: C.laneBg }}>
@@ -99,16 +118,19 @@ export function Timeline({ state, actions, transport }: Props) {
               {clips.filter((c) => c.track === k).map((c) => {
                 const col = clipColors(c);
                 const isSel = c.id === sel;
+                const trackSel = sel === "track:" + c.track;
+                // Audio is controlled per-track (not per-segment): clicking a clip selects its track.
+                const isAudio = c.type === "audio";
                 return (
                   <div
                     key={c.id}
-                    onPointerDown={actions.clipDown(c.id, "move")}
+                    onPointerDown={isAudio ? (e) => { e.stopPropagation(); actions.selectTrack(c.track); } : actions.clipDown(c.id, "move")}
                     onClick={stop}
                     style={{
                       position: "absolute", top: 4, bottom: 4, left: `${((c.start / TT) * 100).toFixed(2)}%`, width: `${((c.dur / TT) * 100).toFixed(2)}%`,
-                      borderRadius: 5, border: isSel ? `2px solid ${C.coral}` : "1px solid rgba(255,255,255,.08)",
-                      boxShadow: isSel ? `0 0 0 1px ${C.coral},0 4px 14px rgba(234,124,105,.4)` : "none",
-                      overflow: "hidden", cursor: "grab", background: col.bg, backgroundImage: col.bgImg, backgroundSize: "cover", backgroundPosition: "center", display: "flex", alignItems: "center",
+                      borderRadius: 5, border: isSel ? `2px solid ${C.coral}` : trackSel ? `1px solid ${C.coral}` : "1px solid rgba(255,255,255,.08)",
+                      boxShadow: isSel ? `0 0 0 1px ${C.coral},0 4px 14px rgba(234,124,105,.4)` : trackSel ? "0 0 0 1px rgba(234,124,105,.4)" : "none",
+                      overflow: "hidden", cursor: isAudio ? "pointer" : "grab", background: col.bg, backgroundImage: col.bgImg, backgroundSize: "cover", backgroundPosition: "center", display: "flex", alignItems: "center",
                     }}
                   >
                     {col.isAudio && (

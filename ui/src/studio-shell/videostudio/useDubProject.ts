@@ -12,6 +12,7 @@ import {
   updateDubSettings,
   type DubDetail,
   type DubMediaInfo,
+  type DubSettings,
   type DubStep,
 } from "../../studioApi";
 import { settingsOf, type VoiceOpt } from "../../components/dubbing/shared";
@@ -57,6 +58,8 @@ export interface DubProjectHook {
   runTo: (target: "synthesized" | "done") => Promise<void>;
   cancel: () => Promise<void>;
   rename: (name: string) => Promise<void>;
+  /** Merge a partial settings patch (volume, burn, …) and persist it. */
+  patchSettings: (partial: Partial<DubSettings>) => Promise<void>;
   setSegment: (segId: string, textVi: string, voice: string | null) => Promise<void>;
   setAllSpeakerVoice: (voice: string | null) => Promise<void>;
   reshorten: () => Promise<void>;
@@ -175,6 +178,15 @@ export function useDubProject(id: string): DubProjectHook {
     [id, detail, refresh],
   );
 
+  const patchSettings = useCallback(
+    async (partial: Partial<DubSettings>) => {
+      if (!detail) return;
+      await updateDubSettings(id, settingsOf(detail.project, partial));
+      await refresh();
+    },
+    [id, detail, refresh],
+  );
+
   const setSegment = useCallback(
     async (segId: string, textVi: string, voice: string | null) => {
       await updateDubSegment(segId, textVi, voice);
@@ -182,6 +194,19 @@ export function useDubProject(id: string): DubProjectHook {
     },
     [refresh],
   );
+
+  // After "Đọc TTS" (synthesize), the per-segment audio exists but the merged VN
+  // track (needed to hear the dub in preview) is only produced by build. Build it
+  // automatically, once, so the preview gets sound without waiting for export.
+  const autoBuilt = useRef("");
+  useEffect(() => {
+    const p = detail?.project;
+    if (!p) return;
+    if (p.status === "synthesized" && !p.vn_track_path && !busy && !autoRun && autoBuilt.current !== id) {
+      autoBuilt.current = id;
+      void run("build");
+    }
+  }, [detail?.project.status, detail?.project.vn_track_path, busy, autoRun, id, run]);
 
   const setAllSpeakerVoice = useCallback(
     async (voice: string | null) => {
@@ -230,6 +255,7 @@ export function useDubProject(id: string): DubProjectHook {
     runTo,
     cancel,
     rename,
+    patchSettings,
     setSegment,
     setAllSpeakerVoice,
     reshorten,

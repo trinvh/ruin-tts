@@ -10,6 +10,7 @@ export function settingsOf(p: DubProject, over?: Partial<DubSettings>): DubSetti
     name: p.name,
     gemini_model: p.gemini_model,
     original_volume: p.original_volume,
+    vn_volume: p.vn_volume,
     speed_cap: p.speed_cap,
     burn_subtitles: p.burn_subtitles,
     blur_subtitle: p.blur_subtitle,

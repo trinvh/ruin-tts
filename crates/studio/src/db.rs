@@ -560,6 +560,7 @@ impl Db {
         name: &str,
         gemini_model: &str,
         original_volume: f64,
+        vn_volume: f64,
         speed_cap: f64,
         burn_subtitles: bool,
         blur_subtitle: bool,
@@ -568,7 +569,7 @@ impl Db {
     ) -> Result<()> {
         let (blur_x, blur_y, blur_w, blur_h) = blur_rect;
         sqlx::query(
-            "UPDATE dub_projects SET name = ?, gemini_model = ?, original_volume = ?, speed_cap = ?,
+            "UPDATE dub_projects SET name = ?, gemini_model = ?, original_volume = ?, vn_volume = ?, speed_cap = ?,
                burn_subtitles = ?, blur_subtitle = ?, blur_x = ?, blur_y = ?, blur_w = ?, blur_h = ?,
                sub_y = ?, updated_at = datetime('now')
              WHERE id = ?",
@@ -576,6 +577,7 @@ impl Db {
         .bind(name)
         .bind(gemini_model)
         .bind(original_volume)
+        .bind(vn_volume)
         .bind(speed_cap)
         .bind(burn_subtitles as i64)
         .bind(blur_subtitle as i64)
@@ -796,6 +798,7 @@ fn dub_project_from_row(r: sqlx::sqlite::SqliteRow) -> crate::dub::DubProject {
         language: r.get("language"),
         gemini_model: r.get("gemini_model"),
         original_volume: r.get("original_volume"),
+        vn_volume: r.get("vn_volume"),
         speed_cap: r.get("speed_cap"),
         burn_subtitles: r.get::<i64, _>("burn_subtitles") != 0,
         blur_subtitle: r.get::<i64, _>("blur_subtitle") != 0,

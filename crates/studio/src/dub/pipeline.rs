@@ -439,6 +439,7 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
 
     let opts = media::ExportOpts {
         original_volume: project.original_volume,
+        vn_volume: project.vn_volume,
         subtitles_burn: if use_burn { sub_path.as_deref() } else { None },
         subtitles_soft: if sub_path.is_some() && !use_burn {
             sub_path.as_deref()

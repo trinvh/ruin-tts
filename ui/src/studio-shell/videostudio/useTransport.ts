@@ -11,6 +11,8 @@ export interface Transport {
   toStart: () => void;
   /** mute/unmute the Vietnamese track */
   setVnMuted: (m: boolean) => void;
+  /** Vietnamese-track volume 0..1 (muted when 0) */
+  setVnVolume: (v: number) => void;
   /** original-track volume 0..1 */
   setOrigVolume: (v: number) => void;
   // <video> event handlers
@@ -81,6 +83,12 @@ export function useTransport(): Transport {
     toStart,
     setVnMuted: (m) => {
       if (vn.current) vn.current.muted = m;
+    },
+    setVnVolume: (v) => {
+      const a = vn.current;
+      if (!a) return;
+      a.volume = Math.max(0, Math.min(1, v));
+      a.muted = v <= 0;
     },
     setOrigVolume: (v) => {
       if (video.current) video.current.volume = v;

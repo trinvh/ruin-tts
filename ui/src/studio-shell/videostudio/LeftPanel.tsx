@@ -106,7 +106,7 @@ function DubTab({ dub }: { dub: DubProjectHook }) {
     <div style={{ flex: 1, overflowY: "auto", padding: "14px 12px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.inset, border: `1px solid ${C.borderInset2}`, borderRadius: 9, padding: "9px 11px", marginBottom: 12 }}>
         <span style={{ width: 7, height: 7, borderRadius: "50%", background: C.coral, flex: "none" }} />
-        <span style={{ fontSize: 11.5, color: C.muted, flex: "none" }}>Đang lồng tiếng:</span>
+        <span style={{ fontSize: 11.5, color: C.muted, flex: "none" }}>Lồng tiếng cho:</span>
         <span style={{ fontSize: 12, fontWeight: 600, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
       </div>
 

@@ -135,6 +135,8 @@ struct UpdateSettings {
     name: String,
     gemini_model: String,
     original_volume: f64,
+    #[serde(default = "default_vn_volume")]
+    vn_volume: f64,
     speed_cap: f64,
     #[serde(default)]
     burn_subtitles: bool,
@@ -154,6 +156,10 @@ struct UpdateSettings {
 
 fn default_sub_y() -> f64 {
     0.9
+}
+
+fn default_vn_volume() -> f64 {
+    1.0
 }
 
 fn default_blur_y() -> f64 {
@@ -178,6 +184,7 @@ async fn update_settings(
             &b.name,
             &b.gemini_model,
             b.original_volume.clamp(0.0, 1.0),
+            b.vn_volume.clamp(0.0, 1.0),
             b.speed_cap.clamp(1.0, 2.5),
             b.burn_subtitles,
             b.blur_subtitle,

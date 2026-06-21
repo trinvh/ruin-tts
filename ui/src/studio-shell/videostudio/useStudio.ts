@@ -15,6 +15,8 @@ export interface StudioActions {
   clipDown: (id: string, mode: "move" | "l" | "r") => (e: React.PointerEvent) => void;
   rulerDown: (e: React.PointerEvent) => void;
   deselect: () => void;
+  /** Select a whole track (sel becomes `track:<KEY>`). */
+  selectTrack: (key: string) => void;
   togglePlay: () => void;
   toStart: () => void;
   setPrev: (el: HTMLElement | null) => void;
@@ -183,6 +185,7 @@ export function useStudio(): { state: StudioState; actions: StudioActions; refs:
   }, [update]);
 
   const deselect = useCallback(() => update(() => ({ sel: null })), [update]);
+  const selectTrack = useCallback((key: string) => update(() => ({ sel: "track:" + key })), [update]);
 
   const togglePlay = useCallback(() => {
     if (stateRef.current.playing) {
@@ -397,7 +400,7 @@ export function useStudio(): { state: StudioState; actions: StudioActions; refs:
   );
 
   const actions: StudioActions = {
-    setTab, onMove, onUp, imgDown, clipDown, rulerDown, deselect, togglePlay, toStart,
+    setTab, onMove, onUp, imgDown, clipDown, rulerDown, deselect, selectTrack, togglePlay, toStart,
     setPrev: (el) => { prevRef.current = el; },
     setLane: (el) => { laneRef.current = el; },
     getDub, patchDub, run, runAll, insertSubs, insertTts, addVideo, addImage, addMusic,
