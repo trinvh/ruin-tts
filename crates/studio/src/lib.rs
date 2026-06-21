@@ -7,6 +7,7 @@
 
 pub mod config;
 pub mod db;
+pub mod dub;
 pub mod idempotency;
 pub mod media;
 pub mod nodes;

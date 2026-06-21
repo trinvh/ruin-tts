@@ -19,6 +19,22 @@ pub struct SynthRequest {
     pub ref_id: Option<String>,
     pub emotion: String,
     pub format: String,
+    // Sampling — lower temperature keeps the voice consistent across sentences.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repetition_penalty: Option<f32>,
+    /// Silence (seconds) inserted between segments — raise it for a slower,
+    /// storytelling pace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub silence_p: Option<f32>,
+    /// Silence (seconds) at paragraph boundaries (≥ silence_p).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paragraph_silence_p: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,10 +50,39 @@ struct JobView {
     error: Option<String>,
 }
 
-/// Cache key for a rendered narration. Distinct chapter/voice/version/text →
-/// distinct key, so edited chapters re-render but unchanged ones are reused.
-pub fn cache_key(chapter_id: &str, voice: &str, version: u32, text: &str) -> String {
-    content_hash(&[chapter_id, voice, &version.to_string(), text])
+/// A voice offered by vieneu-server (`GET /v1/voices`). The label/name carries a
+/// gender hint ("nam"/"nữ") used to auto-map dubbing speakers.
+#[derive(Debug, Clone, Deserialize)]
+pub struct VoiceInfo {
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+}
+
+/// Cache key for a rendered narration. Distinct chapter/voice/version/sampling/
+/// text → distinct key, so edited chapters (or changed sampling) re-render but
+/// unchanged ones are reused.
+pub fn cache_key(
+    chapter_id: &str,
+    voice: &str,
+    version: u32,
+    sampling: &str,
+    text: &str,
+) -> String {
+    content_hash(&[chapter_id, voice, &version.to_string(), sampling, text])
+}
+
+/// A stable fingerprint of a request's sampling params (for the cache key).
+fn sampling_sig(req: &SynthRequest) -> String {
+    format!(
+        "t{:?}|k{:?}|p{:?}|r{:?}|s{:?}|ps{:?}",
+        req.temperature,
+        req.top_k,
+        req.top_p,
+        req.repetition_penalty,
+        req.silence_p,
+        req.paragraph_silence_p
+    )
 }
 
 pub struct TtsClient {
@@ -55,28 +100,89 @@ impl TtsClient {
         }
     }
 
+    /// Retry a request-producing closure a few times on transient errors
+    /// (connection drops, partial bodies) with linear backoff. The TTS server
+    /// can briefly drop connections under load or restart; one blip shouldn't
+    /// fail a 20-minute render.
+    async fn with_retry<T, F, Fut>(&self, what: &str, f: F) -> Result<T>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = reqwest::Result<T>>,
+    {
+        let mut last: Option<reqwest::Error> = None;
+        for attempt in 0..3u32 {
+            match f().await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    tracing::warn!(what, attempt = attempt + 1, "TTS request failed: {e}");
+                    last = Some(e);
+                    tokio::time::sleep(Duration::from_millis(300 * (attempt as u64 + 1))).await;
+                }
+            }
+        }
+        Err(anyhow::Error::new(last.expect("retry ran at least once"))
+            .context(format!("{what} (sau khi thử lại)")))
+    }
+
+    /// List the voices offered by the server (`GET /v1/voices`).
+    pub async fn list_voices(&self) -> Result<Vec<VoiceInfo>> {
+        let url = format!("{}/v1/voices", self.base_url);
+        let voices = self
+            .http
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Vec<VoiceInfo>>()
+            .await?;
+        Ok(voices)
+    }
+
     /// Synthesize, returning the audio bytes (waits for the job to finish).
     pub async fn synth(&self, req: &SynthRequest) -> Result<Vec<u8>> {
+        let jobs_url = format!("{}/v1/jobs", self.base_url);
         let created: JobCreated = self
-            .http
-            .post(format!("{}/v1/jobs", self.base_url))
-            .json(req)
-            .send()
-            .await
-            .context("POST /v1/jobs")?
-            .error_for_status()?
-            .json()
+            .with_retry("POST /v1/jobs", || async {
+                self.http
+                    .post(&jobs_url)
+                    .json(req)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<JobCreated>()
+                    .await
+            })
             .await?;
 
+        let view_url = format!("{}/v1/jobs/{}", self.base_url, created.job_id);
+        let mut poll_errors = 0u32;
         loop {
             tokio::time::sleep(self.poll).await;
-            let view: JobView = self
-                .http
-                .get(format!("{}/v1/jobs/{}", self.base_url, created.job_id))
-                .send()
-                .await?
-                .json()
-                .await?;
+            let view: JobView = match async {
+                self.http
+                    .get(&view_url)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<JobView>()
+                    .await
+            }
+            .await
+            {
+                Ok(v) => {
+                    poll_errors = 0;
+                    v
+                }
+                // Tolerate transient poll failures (server blip) up to a bound.
+                Err(e) => {
+                    poll_errors += 1;
+                    if poll_errors > 20 {
+                        return Err(anyhow::Error::new(e).context("theo dõi tiến trình TTS"));
+                    }
+                    tracing::warn!(job = %created.job_id, poll_errors, "transient TTS poll error: {e}");
+                    continue;
+                }
+            };
             match view.status.as_str() {
                 "done" if view.ready => break,
                 "failed" => {
@@ -90,16 +196,17 @@ impl TtsClient {
             }
         }
 
+        let dl_url = format!("{}/v1/jobs/{}/download", self.base_url, created.job_id);
         let bytes = self
-            .http
-            .get(format!(
-                "{}/v1/jobs/{}/download",
-                self.base_url, created.job_id
-            ))
-            .send()
-            .await?
-            .error_for_status()?
-            .bytes()
+            .with_retry("download", || async {
+                self.http
+                    .get(&dl_url)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .bytes()
+                    .await
+            })
             .await?;
         Ok(bytes.to_vec())
     }
@@ -117,7 +224,7 @@ impl TtsClient {
             .as_deref()
             .or(req.ref_id.as_deref())
             .unwrap_or("default");
-        let key = cache_key(chapter_id, voice, version, &req.text);
+        let key = cache_key(chapter_id, voice, version, &sampling_sig(req), &req.text);
         let path = cache_dir.join(format!("{key}.{}", req.format));
         if path.exists() {
             return Ok(path);
@@ -137,11 +244,13 @@ mod tests {
 
     #[test]
     fn cache_key_is_stable_and_discriminating() {
-        let a = cache_key("ch1", "Bình An", 1, "xin chào");
-        assert_eq!(a, cache_key("ch1", "Bình An", 1, "xin chào"));
-        assert_ne!(a, cache_key("ch1", "Bình An", 2, "xin chào")); // version
-        assert_ne!(a, cache_key("ch1", "Ngọc Linh", 1, "xin chào")); // voice
-        assert_ne!(a, cache_key("ch2", "Bình An", 1, "xin chào")); // chapter
-        assert_ne!(a, cache_key("ch1", "Bình An", 1, "khác")); // text (edit)
+        let s = "t0.5";
+        let a = cache_key("ch1", "Bình An", 1, s, "xin chào");
+        assert_eq!(a, cache_key("ch1", "Bình An", 1, s, "xin chào"));
+        assert_ne!(a, cache_key("ch1", "Bình An", 2, s, "xin chào")); // version
+        assert_ne!(a, cache_key("ch1", "Ngọc Linh", 1, s, "xin chào")); // voice
+        assert_ne!(a, cache_key("ch2", "Bình An", 1, s, "xin chào")); // chapter
+        assert_ne!(a, cache_key("ch1", "Bình An", 1, s, "khác")); // text (edit)
+        assert_ne!(a, cache_key("ch1", "Bình An", 1, "t0.8", "xin chào")); // sampling
     }
 }

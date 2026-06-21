@@ -51,6 +51,15 @@ pub struct AppConfig {
     pub yt_client_secret: String,
     pub yt_refresh_token: String,
     pub yt_privacy: String,
+    /// Video dubbing: analysis sidecar (media-ai) base URL.
+    pub media_ai_base: String,
+    /// Video dubbing: Gemini API key (translation) + model.
+    pub gemini_api_key: String,
+    pub gemini_model: String,
+    /// Default voices used to auto-map dubbing speakers by detected gender
+    /// (vieneu's voice list carries no gender, so the operator sets these once).
+    pub dub_voice_male: String,
+    pub dub_voice_female: String,
     pub profile: Profile,
 }
 
@@ -64,6 +73,11 @@ impl Default for AppConfig {
             yt_client_secret: String::new(),
             yt_refresh_token: String::new(),
             yt_privacy: "private".into(),
+            media_ai_base: "http://127.0.0.1:8099".into(),
+            gemini_api_key: String::new(),
+            gemini_model: "gemini-2.5-flash".into(),
+            dub_voice_male: String::new(),
+            dub_voice_female: String::new(),
             profile: Profile::default(),
         }
     }
@@ -111,6 +125,18 @@ pub struct Profile {
     pub delay_after_content: f64,
     pub delay_after_outro: f64,
 
+    /// Narration sampling. Lower temperature keeps the voice consistent across
+    /// sentences (each is generated independently); 0.8 (engine default) drifts.
+    pub voice_temperature: f32,
+    pub voice_top_k: u32,
+    pub voice_top_p: f32,
+    pub voice_repetition_penalty: f32,
+    /// Silence (seconds) between spoken segments within narration. Engine
+    /// default is 0.15; raise it (e.g. 0.35–0.6) for a storytelling pace.
+    pub segment_pause: f32,
+    /// Silence (seconds) at paragraph boundaries (usually > segment_pause).
+    pub paragraph_pause: f32,
+
     pub workflow_version: u32,
 }
 
@@ -140,6 +166,12 @@ impl Default for Profile {
             delay_after_intro: 0.8,
             delay_after_content: 0.8,
             delay_after_outro: 1.2,
+            voice_temperature: 0.5,
+            voice_top_k: 25,
+            voice_top_p: 0.9,
+            voice_repetition_penalty: 1.3,
+            segment_pause: 0.35,
+            paragraph_pause: 0.7,
             workflow_version: 1,
         }
     }
