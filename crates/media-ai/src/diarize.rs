@@ -1,42 +1,55 @@
-//! Speaker diarization (who-speaks-when).
+//! Speaker diarization: cluster per-segment wav2vec2 embeddings into speakers.
 //!
-//! Status: single-speaker fallback covering the whole clip — correct for
-//! monologues (most house-tour source videos); multi-speaker clips collapse to
-//! one speaker until full diarization lands.
-//!
-//! TODO(port): the natural crate (`sherpa-rs`) bundles its own ONNX Runtime,
-//! which would collide with the `ort` runtime the age/gender model links into
-//! the same binary. So real diarization should reuse **ort**: run the pyannote
-//! segmentation ONNX over sliding windows, extract speaker embeddings, then
-//! cluster (agglomerative) — the clustering step is pure and unit-testable; the
-//! ONNX inference + window stitching need on-device validation against pyannote.
+//! This reuses the (single, ort-based) audeering wav2vec2 model already loaded
+//! for age/gender — its pooled hidden state doubles as a speaker embedding. That
+//! keeps everything on one ONNX Runtime (no `sherpa-onnx` runtime conflict) and
+//! one binary. It clusters at ASR-segment granularity (no overlap handling),
+//! which fits sequential multi-speaker video; a dedicated speaker-embedding
+//! model could be swapped in later for tougher cases.
 
-use anyhow::Result;
+use crate::cluster::cluster;
 
-pub struct Turn {
-    pub start: f64,
-    pub end: f64,
-    pub speaker: String,
+/// Default cosine-similarity threshold for merging segments into one speaker.
+/// Tuned against real clips; override with `MEDIA_AI_DIARIZE_THRESHOLD`.
+pub const DEFAULT_THRESHOLD: f32 = 0.85;
+
+pub fn speaker_label(i: usize) -> String {
+    format!("SPEAKER_{i:02}")
 }
 
-pub struct Diarizer;
+/// Cluster one embedding per segment into `SPEAKER_xx` labels (one per input).
+pub fn assign_speakers(
+    embeddings: &[Vec<f32>],
+    threshold: f32,
+    num_speakers: Option<usize>,
+) -> Vec<String> {
+    cluster(embeddings, threshold, num_speakers)
+        .into_iter()
+        .map(speaker_label)
+        .collect()
+}
 
-impl Diarizer {
-    pub fn load() -> Result<Self> {
-        Ok(Self)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_two_groups_distinctly() {
+        let e = vec![
+            vec![1.0, 0.0],
+            vec![0.96, 0.04],
+            vec![0.0, 1.0],
+            vec![0.03, 0.97],
+        ];
+        let s = assign_speakers(&e, 0.5, None);
+        assert_eq!(s[0], "SPEAKER_00");
+        assert_eq!(s[0], s[1]);
+        assert_eq!(s[2], s[3]);
+        assert_ne!(s[0], s[2]);
     }
 
-    pub fn diarize(
-        &self,
-        _audio: &[f32],
-        duration: f64,
-        _num_speakers: Option<u32>,
-    ) -> Result<Vec<Turn>> {
-        tracing::warn!("diarization chưa được port sang Rust — tạm dùng 1 người nói");
-        Ok(vec![Turn {
-            start: 0.0,
-            end: duration,
-            speaker: "SPEAKER_00".to_string(),
-        }])
+    #[test]
+    fn empty_input() {
+        assert!(assign_speakers(&[], 0.5, None).is_empty());
     }
 }

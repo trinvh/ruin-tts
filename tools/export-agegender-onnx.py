@@ -60,7 +60,11 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
         pooled = torch.mean(hidden, dim=1)
         logits_age = self.age(pooled)
         logits_gender = torch.softmax(self.gender(pooled), dim=1)
-        return logits_age, logits_gender
+        # Separate L2-normalized node so it gets the `hidden` output name (a node
+        # shared with the heads keeps its internal name) and so cosine clustering
+        # for diarization works on unit vectors.
+        embedding = torch.nn.functional.normalize(pooled, dim=1)
+        return logits_age, logits_gender, embedding
 
 
 def main() -> None:

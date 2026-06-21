@@ -22,62 +22,78 @@ impl<T, E: std::fmt::Display> OrtAny<T> for std::result::Result<T, E> {
     }
 }
 
-pub struct AgeGender {
+/// Per-segment features from one wav2vec2 pass: a speaker embedding (the pooled
+/// hidden state, for diarization clustering) plus age + gender.
+pub struct SegmentFeatures {
+    pub embedding: Vec<f32>,
     pub gender: Option<String>,
     pub age: Option<f64>,
 }
 
-pub struct AgeGenderModel {
+pub struct Wav2Vec2 {
     // ort's Session::run takes &mut self → Mutex for interior mutability under &self.
     session: Option<Mutex<Session>>,
+    /// Name of the embedding output. The exporter can't reliably name a node it
+    /// shares with the heads, so we resolve it as "the output that isn't a logit".
+    embed_output: String,
 }
 
-impl AgeGenderModel {
-    /// `model_path` = an exported ONNX; `None` disables age/gender (graceful).
+impl Wav2Vec2 {
+    /// `model_path` = the exported audeering ONNX; `None` disables embedding +
+    /// age/gender (diarization then falls back to a single speaker).
     pub fn load(model_path: Option<&Path>) -> Result<Self> {
-        let session = match model_path {
+        match model_path {
             Some(p) => {
                 let s = Session::builder()
                     .any()?
                     .commit_from_file(p)
                     .any()
-                    .with_context(|| format!("nạp model age/gender {}", p.display()))?;
-                tracing::info!("age/gender: đã nạp model {}", p.display());
-                Some(Mutex::new(s))
+                    .with_context(|| format!("nạp model wav2vec2 {}", p.display()))?;
+                let embed_output = s
+                    .outputs()
+                    .iter()
+                    .map(|o| o.name().to_string())
+                    .find(|n| n != "logits_age" && n != "logits_gender")
+                    .unwrap_or_default();
+                tracing::info!(
+                    "wav2vec2: đã nạp {} (embedding output = {embed_output})",
+                    p.display()
+                );
+                Ok(Self {
+                    session: Some(Mutex::new(s)),
+                    embed_output,
+                })
             }
             None => {
                 tracing::warn!(
-                    "age/gender: chưa cấu hình model (MEDIA_AI_AGEGENDER_REPO/PATH) — bỏ qua"
+                    "wav2vec2: chưa cấu hình model (MEDIA_AI_AGEGENDER_REPO/PATH) — bỏ diarization + age/gender"
                 );
-                None
-            }
-        };
-        Ok(Self { session })
-    }
-
-    pub fn predict(&self, samples: &[f32], _sr: u32) -> AgeGender {
-        match self.run(samples) {
-            Ok(ag) => ag,
-            Err(e) => {
-                tracing::warn!("age/gender inference lỗi: {e}");
-                AgeGender {
-                    gender: None,
-                    age: None,
-                }
+                Ok(Self {
+                    session: None,
+                    embed_output: String::new(),
+                })
             }
         }
     }
 
-    fn run(&self, samples: &[f32]) -> Result<AgeGender> {
-        let none = AgeGender {
-            gender: None,
-            age: None,
-        };
+    /// Run the model on one segment's audio → features, or `None` (no model /
+    /// empty / inference error — caller degrades gracefully).
+    pub fn infer(&self, samples: &[f32]) -> Option<SegmentFeatures> {
+        match self.run(samples) {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!("wav2vec2 inference lỗi: {e}");
+                None
+            }
+        }
+    }
+
+    fn run(&self, samples: &[f32]) -> Result<Option<SegmentFeatures>> {
         let Some(mtx) = &self.session else {
-            return Ok(none);
+            return Ok(None);
         };
         if samples.is_empty() {
-            return Ok(none);
+            return Ok(None);
         }
         let norm = normalize_waveform(samples);
         let len = norm.len();
@@ -87,11 +103,25 @@ impl AgeGenderModel {
             Cow::Borrowed("input_values"),
             SessionInputValue::from(Tensor::from_array(arr).any()?),
         )];
-        let mut session = mtx.lock().map_err(|_| anyhow::anyhow!("agegender lock"))?;
+        let mut session = mtx.lock().map_err(|_| anyhow::anyhow!("wav2vec2 lock"))?;
         let out = session.run(feeds).any()?;
 
-        let gender_logits = out["logits_gender"].try_extract_array::<f32>().any()?;
-        let g: Vec<f32> = gender_logits.iter().copied().collect();
+        let emb_val = out
+            .get(self.embed_output.as_str())
+            .ok_or_else(|| anyhow::anyhow!("thiếu output embedding '{}'", self.embed_output))?;
+        let embedding: Vec<f32> = emb_val
+            .try_extract_array::<f32>()
+            .any()?
+            .iter()
+            .copied()
+            .collect();
+
+        let g: Vec<f32> = out["logits_gender"]
+            .try_extract_array::<f32>()
+            .any()?
+            .iter()
+            .copied()
+            .collect();
         let gender = (g.len() >= 3)
             .then(|| gender_from_logits([g[0], g[1], g[2]]))
             .flatten()
@@ -105,7 +135,11 @@ impl AgeGenderModel {
             .copied()
             .map(age_from_raw);
 
-        Ok(AgeGender { gender, age })
+        Ok(Some(SegmentFeatures {
+            embedding,
+            gender,
+            age,
+        }))
     }
 }
 

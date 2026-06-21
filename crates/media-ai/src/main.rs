@@ -54,6 +54,9 @@ struct Args {
     /// Local path to the age/gender ONNX (overrides the repo download).
     #[arg(long, env = "MEDIA_AI_AGEGENDER_PATH")]
     agegender_path: Option<String>,
+    /// Cosine-similarity threshold for diarization clustering.
+    #[arg(long, env = "MEDIA_AI_DIARIZE_THRESHOLD")]
+    diarize_threshold: Option<f32>,
 }
 
 /// Resolve the optional age/gender ONNX: explicit local path, else an HF repo
@@ -94,11 +97,9 @@ async fn main() -> Result<()> {
     .context("tải model whisper")?;
     let asr = asr::Asr::load(model_path.to_string_lossy().as_ref())?;
     let agegender_path = resolve_agegender(&args)?;
-    let analyzer = Analyzer::new(
-        asr,
-        diarize::Diarizer::load()?,
-        agegender::AgeGenderModel::load(agegender_path.as_deref())?,
-    );
+    let model = agegender::Wav2Vec2::load(agegender_path.as_deref())?;
+    let threshold = args.diarize_threshold.unwrap_or(diarize::DEFAULT_THRESHOLD);
+    let analyzer = Analyzer::new(asr, model, threshold);
 
     let state = Arc::new(AppState { analyzer });
     let app = Router::new()
