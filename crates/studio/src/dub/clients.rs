@@ -142,6 +142,11 @@ impl GeminiClient {
         );
         // responseSchema forces Gemini to emit strictly-typed JSON, which avoids
         // the occasional malformed object (e.g. `"id 22,` missing the `":`).
+        //
+        // thinkingBudget=0 disables the Gemini 2.5 "thinking" pass. It is on by
+        // default for 2.5-flash and adds large latency for no quality gain on a
+        // constrained dialogue-translation task — the main cause of slow runs.
+        // (2.5-pro ignores 0 and keeps a minimum budget; harmless there.)
         let body = json!({
             "contents": [{ "parts": [{ "text": prompt }] }],
             "generationConfig": {
@@ -157,7 +162,8 @@ impl GeminiClient {
                         "required": ["id", "vi"]
                     }
                 },
-                "temperature": 0.3
+                "temperature": 0.3,
+                "thinkingConfig": { "thinkingBudget": 0 }
             }
         });
         let resp = self
