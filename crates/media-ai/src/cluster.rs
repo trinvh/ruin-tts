@@ -19,7 +19,61 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 /// `threshold`; if `num_speakers` is given, merge until exactly that many
 /// remain (ignoring the threshold).
 pub fn cluster(embeddings: &[Vec<f32>], threshold: f32, num_speakers: Option<usize>) -> Vec<usize> {
-    unimplemented!("RED")
+    let n = embeddings.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    // pairwise cosine similarity
+    let mut sim = vec![vec![0f32; n]; n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let s = cosine(&embeddings[i], &embeddings[j]);
+            sim[i][j] = s;
+            sim[j][i] = s;
+        }
+    }
+    let mut clusters: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
+    loop {
+        if clusters.len() <= 1 {
+            break;
+        }
+        if num_speakers.is_some_and(|k| clusters.len() <= k.max(1)) {
+            break;
+        }
+        // most-similar pair by average linkage
+        let (mut best, mut best_sim) = ((0usize, 1usize), f32::MIN);
+        for a in 0..clusters.len() {
+            for b in (a + 1)..clusters.len() {
+                let mut acc = 0f32;
+                let mut cnt = 0u32;
+                for &i in &clusters[a] {
+                    for &j in &clusters[b] {
+                        acc += sim[i][j];
+                        cnt += 1;
+                    }
+                }
+                let avg = acc / cnt as f32;
+                if avg > best_sim {
+                    best_sim = avg;
+                    best = (a, b);
+                }
+            }
+        }
+        if num_speakers.is_none() && best_sim < threshold {
+            break;
+        }
+        let (a, b) = best;
+        let mut moved = std::mem::take(&mut clusters[b]);
+        clusters[a].append(&mut moved);
+        clusters.remove(b);
+    }
+    let mut labels = vec![0usize; n];
+    for (label, members) in clusters.iter().enumerate() {
+        for &i in members {
+            labels[i] = label;
+        }
+    }
+    labels
 }
 
 #[cfg(test)]
