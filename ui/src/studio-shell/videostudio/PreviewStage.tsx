@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { C, MONO } from "../theme";
 import { Icon } from "../icons";
 import { HoverBox } from "../ui";
@@ -20,6 +20,7 @@ const ctlHover: React.CSSProperties = { background: C.panel3, color: "#fff" };
 const ASPECTS: Aspect[] = ["9:16", "1:1", "16:9"];
 
 export function PreviewStage({ state, actions, dub, transport }: Props) {
+  const boxRef = useRef<HTMLDivElement | null>(null);
   const { subStyle, aspect } = state;
   const t = transport.time;
   const total = transport.duration || dub.duration;
@@ -64,7 +65,7 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
           backgroundPosition: "0 0,0 11px,11px -11px,-11px 0",
         }}
       >
-        <div ref={(el) => actions.setPrev(el)} style={{ position: "relative", height: "100%", aspectRatio: aspectCss, maxWidth: "100%", borderRadius: 6, overflow: "hidden", background: "#000", boxShadow: "0 10px 40px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.05)" }}>
+        <div ref={(el) => { actions.setPrev(el); boxRef.current = el; }} style={{ position: "relative", height: "100%", aspectRatio: aspectCss, maxWidth: "100%", borderRadius: 6, overflow: "hidden", background: "#000", boxShadow: "0 10px 40px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.05)" }}>
           <video
             ref={(el) => transport.attachVideo(el)}
             src={dub.videoUrl || undefined}
@@ -115,7 +116,7 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
               <button key={a} onClick={() => actions.setAspect(a)} style={{ border: "none", background: a === aspect ? C.coral : "transparent", color: a === aspect ? "#fff" : C.steel, borderRadius: 6, padding: "5px 10px", cursor: "pointer", fontFamily: MONO, fontSize: 11.5, fontWeight: 500 }}>{a}</button>
             ))}
           </div>
-          <HoverBox as="button" style={ctlBtn} hoverStyle={ctlHover}><Icon name="maximize" size={17} stroke={1.8} /></HoverBox>
+          <HoverBox as="button" title="Toàn màn hình" onClick={() => { void boxRef.current?.requestFullscreen?.(); }} style={ctlBtn} hoverStyle={ctlHover}><Icon name="maximize" size={17} stroke={1.8} /></HoverBox>
         </div>
       </div>
     </div>

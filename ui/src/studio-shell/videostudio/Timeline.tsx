@@ -92,7 +92,9 @@ export function Timeline({ state, actions, transport, trackCtl }: Props) {
           })}
         </div>
 
-        <div ref={(el) => actions.setLane(el)} onClick={() => actions.deselect()} style={{ flex: 1, position: "relative", overflowY: "auto", overflowX: "hidden", background: C.laneBg }}>
+        <div onClick={() => actions.deselect()} style={{ flex: 1, position: "relative", overflowY: "auto", overflowX: "auto", background: C.laneBg }}>
+          {/* zoom-scaled content (clip left/width are % of this width) */}
+          <div ref={(el) => actions.setLane(el)} style={{ position: "relative", width: `${Math.max(100, state.zoom)}%`, minWidth: "100%" }}>
           {/* ruler */}
           <div
             ref={rulerRef}
@@ -156,6 +158,7 @@ export function Timeline({ state, actions, transport, trackCtl }: Props) {
 
           <div style={{ position: "absolute", top: 0, bottom: 0, left: `${((ph / TT) * 100).toFixed(2)}%`, width: 0, borderLeft: `2px solid ${C.coral}`, pointerEvents: "none", zIndex: 5, boxShadow: "0 0 8px rgba(234,124,105,.6)" }}>
             <div style={{ position: "absolute", top: -1, left: -7, width: 14, height: 13, background: C.coral, clipPath: "polygon(0 0,100% 0,100% 55%,50% 100%,0 55%)" }} />
+          </div>
           </div>
         </div>
       </div>

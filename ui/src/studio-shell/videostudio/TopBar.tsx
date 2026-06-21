@@ -13,18 +13,15 @@ interface Props {
   dub: DubProjectHook;
 }
 
-const iconBtn: React.CSSProperties = {
-  width: 32, height: 32, border: "none", background: "transparent", color: C.steel,
-  borderRadius: 7, display: "grid", placeItems: "center", cursor: "pointer",
-};
-const iconHover: React.CSSProperties = { background: C.panel3, color: "#fff" };
-
 export function TopBar({ title, onTitle, onTitleCommit, snap, onToggleSnap, dub }: Props) {
   const status = dub.detail?.project.status ?? "";
   const working = dub.busy || dub.autoRun;
   const st = dubStatus(status || "created");
   const statusText = dub.autoRun ? "Đang chạy…" : st.label;
   const statusColor = working ? C.orange : status === "failed" ? C.pink : status === "done" ? C.teal : C.muted;
+
+  const h = dub.info?.video?.height ?? null;
+  const res = h ? (h >= 2160 ? "4K" : `${h}p`) : null;
 
   const synthDone = dub.reachedIdx >= ORDER.indexOf("synthesized");
   const canAuto = !!dub.detail && !working && !synthDone;
@@ -60,11 +57,8 @@ export function TopBar({ title, onTitle, onTitleCommit, snap, onToggleSnap, dub 
         </div>
       </div>
 
-      {/* undo / redo / snap */}
+      {/* snap */}
       <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 4 }}>
-        <HoverBox as="button" title="Hoàn tác" style={iconBtn} hoverStyle={iconHover}><Icon name="undo" size={17} /></HoverBox>
-        <HoverBox as="button" title="Làm lại" style={iconBtn} hoverStyle={iconHover}><Icon name="redo" size={17} /></HoverBox>
-        <div style={{ width: 1, height: 22, background: C.border, margin: "0 6px" }} />
         <button
           onClick={onToggleSnap}
           title="Bám dính"
@@ -90,14 +84,12 @@ export function TopBar({ title, onTitle, onTitleCommit, snap, onToggleSnap, dub 
           <Icon name="runAll" size={15} color="currentColor" />
           Lồng tiếng tự động
         </HoverBox>
-        <HoverBox
-          as="button"
-          style={{ height: 34, padding: "0 12px", border: `1px solid ${C.border}`, background: C.panel2, color: "#fff", borderRadius: 8, display: "flex", alignItems: "center", gap: 9, cursor: "pointer", fontFamily: FONT }}
-          hoverStyle={{ borderColor: "#4a4e5e", background: C.panel3 }}
-        >
-          <span style={{ fontSize: 13, fontWeight: 600 }}>1080p</span>
-          <span style={{ fontSize: 11, color: C.muted2, fontFamily: MONO, borderLeft: `1px solid ${C.border}`, paddingLeft: 9 }}>MP4</span>
-        </HoverBox>
+        {res && (
+          <div title="Độ phân giải nguồn — xuất ra MP4" style={{ height: 34, padding: "0 12px", border: `1px solid ${C.border}`, background: C.panel2, color: "#fff", borderRadius: 8, display: "flex", alignItems: "center", gap: 9, fontFamily: FONT }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{res}</span>
+            <span style={{ fontSize: 11, color: C.muted2, fontFamily: MONO, borderLeft: `1px solid ${C.border}`, paddingLeft: 9 }}>MP4</span>
+          </div>
+        )}
         <HoverBox
           as="button"
           onClick={() => canExport && void dub.runTo("done")}
