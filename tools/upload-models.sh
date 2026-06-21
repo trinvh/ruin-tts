@@ -11,7 +11,7 @@
 # media-ai defaults to sherpa-onnx's public, non-gated copy.
 set -euo pipefail
 
-REPO="${MODELS_REPO:-trinvhco/ruin-media-ai}"
+REPO="${MODELS_REPO:-trinvh/ruin-media-ai}"
 OUT="${OUT:-/tmp/ruin-media-ai-models}"
 PY=(uv run --with torch --with "transformers==4.40.2" --with onnx --with onnxscript --with "numpy<2" python)
 SEP=(uv run --with asteroid --with requests --with onnx --with onnxscript --with "numpy<2" python)

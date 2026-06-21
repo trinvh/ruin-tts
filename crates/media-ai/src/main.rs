@@ -34,7 +34,7 @@ use crate::types::AnalyzeRequest;
 /// Default HF repo for the project-exported ONNX models (speaker embedding +
 /// age/gender). Populate it once with `make upload-models` (see
 /// tools/upload-models.sh); a missing repo just degrades gracefully.
-const MODELS_REPO: &str = "trinvhco/ruin-media-ai";
+const MODELS_REPO: &str = "trinvh/ruin-media-ai";
 
 #[derive(Parser)]
 #[command(about = "media-ai: audio analysis sidecar (ASR + diarization + age/gender), Rust port")]
