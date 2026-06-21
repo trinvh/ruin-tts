@@ -167,12 +167,22 @@ fn candidates(env_var: &str, name: &str) -> Vec<PathBuf> {
         v.push(p.into());
     }
     let exe_name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            v.push(dir.join(&exe_name));
-        }
+    let exe_adjacent = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join(&exe_name)));
+    let workspace_release =
+        PathBuf::from(format!("{}/../../target/release/{exe_name}", env!("CARGO_MANIFEST_DIR")));
+    // `tauri dev` runs the app from ui/src-tauri/target/debug, which can hold a
+    // STALE sidecar build — so a dev build prefers the freshly-built workspace
+    // target/release. A bundled (release) app keeps the sidecars next to its exe
+    // and has no source tree, so it prefers the exe-adjacent copy.
+    if cfg!(debug_assertions) {
+        v.push(workspace_release);
+        v.extend(exe_adjacent);
+    } else {
+        v.extend(exe_adjacent);
+        v.push(workspace_release);
     }
-    v.push(PathBuf::from(format!("{}/../../target/release/{exe_name}", env!("CARGO_MANIFEST_DIR"))));
     v
 }
 
