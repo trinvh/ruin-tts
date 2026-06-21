@@ -6,6 +6,7 @@ mod agegender;
 mod analyze;
 mod asr;
 mod audio;
+mod cluster;
 mod diarize;
 mod models;
 mod types;
