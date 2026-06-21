@@ -11,10 +11,11 @@ SERVER  := ./target/release/vieneu-server
 CLI     := ./target/release/vieneu
 
 .DEFAULT_GOAL := help
-.PHONY: help build build-debug test fmt fmt-check clippy clean \
+.PHONY: help build build-debug sidecars test fmt fmt-check clippy clean \
         server server-dev cli voices synth batch smoke \
         ui-install ui-build ui-dev ui-web e2e \
-        studio-server studio-web studio-test
+        studio-server studio-web studio-test \
+        media-ai media-ai-run
 
 ## ── Studio (webnovel → audiobook → YouTube automation) ─────────────
 studio-server: ## Run the studio automation server (set RUIN_API_KEY)
@@ -26,6 +27,14 @@ studio-web: ## Run the studio operator UI (React Flow) dev server
 studio-test: ## Run studio crate tests
 	cargo test -p studio
 
+## ── Video dubbing sidecar (services/media-ai, :8099) ───────────────
+media-ai: ## Set up the dubbing sidecar (Python venv + deps; Intel Mac uses CPU whisper)
+	cd services/media-ai && python3 -m venv .venv && ./.venv/bin/pip install -U pip && ./.venv/bin/pip install -e .
+	@echo "Next: put HF_TOKEN in services/media-ai/.env, then 'make media-ai-run'"
+
+media-ai-run: ## Run the dubbing sidecar (ASR + diarization)
+	cd services/media-ai && ./.venv/bin/uvicorn app:app --port 8099
+
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -36,6 +45,10 @@ build: ## Release build of all crates (core, server, cli)
 
 build-debug: ## Debug build of all crates
 	cargo build --workspace
+
+sidecars: ## Build just the release server binaries the Tauri app launches
+	cargo build --release -p vieneu-server --bin vieneu-server
+	cargo build --release -p studio --bin studio-server
 
 test: ## Run the full test suite
 	cargo test --workspace
