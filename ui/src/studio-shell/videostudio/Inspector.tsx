@@ -20,13 +20,15 @@ interface Props {
 const SECTION: React.CSSProperties = { fontSize: 11, fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase", color: C.muted2, marginBottom: 13 };
 const cl = (v: number, mn: number, mx: number) => (((v - mn) / (mx - mn)) * 100).toFixed(1);
 
-function Slider({ label, labelW = 58, min, max, value, onChange, display, mode = "left" }: {
+function Slider({ label, labelW = 58, min, max, value, onChange, onCommit, display, mode = "left" }: {
   label: string;
   labelW?: number;
   min: number;
   max: number;
   value: number;
   onChange: (v: number) => void;
+  /** Fired on pointer/mouse up, after dragging — used to persist the value. */
+  onCommit?: (v: number) => void;
   display: string;
   mode?: "left" | "center";
 }) {
@@ -34,10 +36,12 @@ function Slider({ label, labelW = 58, min, max, value, onChange, display, mode =
     mode === "center"
       ? `linear-gradient(to right,${C.border} 50%,${C.coral} 50%)`
       : `linear-gradient(to right,${C.coral} ${cl(value, min, max)}%,${C.border} ${cl(value, min, max)}%)`;
+  const commit = (e: React.PointerEvent<HTMLInputElement> | React.MouseEvent<HTMLInputElement>) =>
+    onCommit?.(Number((e.currentTarget as HTMLInputElement).value));
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 13 }}>
       <span style={{ width: labelW, flex: "none", fontSize: 12, color: C.steel }}>{label}</span>
-      <input type="range" min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))} style={{ flex: 1, background: fill }} />
+      <input type="range" min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))} onPointerUp={onCommit ? commit : undefined} onMouseUp={onCommit ? commit : undefined} style={{ flex: 1, background: fill }} />
       <span style={{ width: 42, textAlign: "right", color: "#fff", fontFamily: MONO, fontSize: 12 }}>{display}</span>
     </div>
   );
@@ -157,13 +161,13 @@ export function Inspector({ state, actions, dub, transport, trackCtl }: Props) {
             />
             {!subSegId && <div style={{ fontSize: 10.5, color: C.muted3, marginTop: -12, marginBottom: 16 }}>Phụ đề gốc chỉ để xem. Sửa bản dịch ở track “Phụ đề Việt”.</div>}
             <div style={{ ...SECTION, marginBottom: 11 }}>Kiểu chữ</div>
-            <Slider label="Cỡ chữ" labelW={54} min={18} max={52} value={state.subStyle.size} onChange={(v) => actions.setSubNum("size", v)} display={`${state.subStyle.size}`} />
+            <Slider label="Cỡ chữ" labelW={54} min={18} max={52} value={state.subStyle.size} onChange={(v) => actions.setSubNum("size", v)} onCommit={(v) => void dub.patchSettings({ sub_size: v })} display={`${state.subStyle.size}`} />
             <Slider label="Vị trí" labelW={54} min={20} max={92} value={state.subStyle.pos} onChange={(v) => actions.setSubNum("pos", v)} display={`${state.subStyle.pos}`} />
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
               <span style={{ width: 54, flex: "none", fontSize: 12, color: C.steel }}>Màu</span>
               <div style={{ display: "flex", gap: 7 }}>
                 {SUBC.map((sc) => (
-                  <button key={sc} onClick={() => actions.setSubColor(sc)} style={{ width: 24, height: 24, borderRadius: "50%", background: sc, border: `2px solid ${sc === state.subStyle.color ? "#fff" : "transparent"}`, cursor: "pointer" }} />
+                  <button key={sc} onClick={() => { actions.setSubColor(sc); void dub.patchSettings({ sub_color: sc }); }} style={{ width: 24, height: 24, borderRadius: "50%", background: sc, border: `2px solid ${sc === state.subStyle.color ? "#fff" : "transparent"}`, cursor: "pointer" }} />
                 ))}
               </div>
             </div>
@@ -176,7 +180,7 @@ export function Inspector({ state, actions, dub, transport, trackCtl }: Props) {
                 <div style={{ fontSize: 12, color: C.steel }}>Song ngữ</div>
                 <div style={{ fontSize: 10.5, color: C.muted3, marginTop: 1 }}>Hiện tiếng Trung trên tiếng Việt</div>
               </div>
-              <Toggle on={state.subStyle.bilingual} onClick={actions.toggleBil} />
+              <Toggle on={state.subStyle.bilingual} onClick={() => { actions.toggleBil(); void dub.patchSettings({ sub_bilingual: !state.subStyle.bilingual }); }} />
             </div>
           </>
         )}

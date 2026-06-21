@@ -19,6 +19,9 @@ export function settingsOf(p: DubProject, over?: Partial<DubSettings>): DubSetti
     blur_w: p.blur_w,
     blur_h: p.blur_h,
     sub_y: p.sub_y,
+    sub_size: p.sub_size,
+    sub_color: p.sub_color,
+    sub_bilingual: p.sub_bilingual,
     ...over,
   };
 }

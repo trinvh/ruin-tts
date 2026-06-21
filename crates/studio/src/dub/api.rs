@@ -152,14 +152,40 @@ struct UpdateSettings {
     blur_h: f64,
     #[serde(default = "default_sub_y")]
     sub_y: f64,
+    #[serde(default = "default_sub_size")]
+    sub_size: f64,
+    #[serde(default = "default_sub_color")]
+    sub_color: String,
+    #[serde(default)]
+    sub_bilingual: bool,
 }
 
 fn default_sub_y() -> f64 {
     0.9
 }
 
+fn default_sub_size() -> f64 {
+    30.0
+}
+
+fn default_sub_color() -> String {
+    "#ffffff".to_string()
+}
+
 fn default_vn_volume() -> f64 {
     1.0
+}
+
+/// Accept only a `#RRGGBB` hex colour; fall back to white on anything else so a
+/// malformed value can never reach the ffmpeg `force_style` filter.
+fn sanitize_hex_color(c: &str) -> String {
+    let t = c.trim();
+    let ok = t.len() == 7 && t.starts_with('#') && t[1..].bytes().all(|b| b.is_ascii_hexdigit());
+    if ok {
+        t.to_lowercase()
+    } else {
+        default_sub_color()
+    }
 }
 
 fn default_blur_y() -> f64 {
@@ -195,6 +221,9 @@ async fn update_settings(
                 b.blur_h.clamp(0.01, 1.0),
             ),
             b.sub_y.clamp(0.0, 1.0),
+            b.sub_size.clamp(8.0, 120.0),
+            &sanitize_hex_color(&b.sub_color),
+            b.sub_bilingual,
         )
         .await?;
     let project = st.services.db.get_dub_project(&id).await?;

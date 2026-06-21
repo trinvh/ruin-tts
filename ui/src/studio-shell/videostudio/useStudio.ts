@@ -37,6 +37,8 @@ export interface StudioActions {
   resetColor: () => void;
   setSubNum: (key: "size" | "pos", value: number) => void;
   setSubColor: (color: string) => void;
+  /** Seed subtitle style from the persisted project (size/color/bilingual). */
+  seedSubStyle: (partial: Partial<StudioState["subStyle"]>) => void;
   toggleSubBg: () => void;
   toggleBil: () => void;
   setVoice: (v: string) => void;
@@ -363,6 +365,7 @@ export function useStudio(): { state: StudioState; actions: StudioActions; refs:
   const setSubColor = useCallback((color: string) => update((s) => ({ subStyle: { ...s.subStyle, color } })), [update]);
   const toggleSubBg = useCallback(() => update((s) => ({ subStyle: { ...s.subStyle, bg: !s.subStyle.bg } })), [update]);
   const toggleBil = useCallback(() => update((s) => ({ subStyle: { ...s.subStyle, bilingual: !s.subStyle.bilingual } })), [update]);
+  const seedSubStyle = useCallback((partial: Partial<StudioState["subStyle"]>) => update((s) => ({ subStyle: { ...s.subStyle, ...partial } })), [update]);
 
   const setVoice = useCallback((v: string) => {
     const vid = dubVidId();
@@ -404,7 +407,7 @@ export function useStudio(): { state: StudioState; actions: StudioActions; refs:
     setPrev: (el) => { prevRef.current = el; },
     setLane: (el) => { laneRef.current = el; },
     getDub, patchDub, run, runAll, insertSubs, insertTts, addVideo, addImage, addMusic,
-    setClipNum, setClipText, resetColor, setSubNum, setSubColor, toggleSubBg, toggleBil,
+    setClipNum, setClipText, resetColor, setSubNum, setSubColor, seedSubStyle, toggleSubBg, toggleBil,
     setVoice, toggleSnap, setAspect, zoomIn, zoomOut, splitSel, delSel, replaceClips,
   };
 

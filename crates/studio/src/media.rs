@@ -295,11 +295,13 @@ pub fn mux_dub_args(video: &Path, voice: &Path, out: &Path, original_volume: f64
     ]
 }
 
-/// One subtitle cue: start/end seconds + text.
+/// One subtitle cue: start/end seconds + text, plus an optional line rendered
+/// above it (used for bilingual source-over-Vietnamese subtitles).
 pub struct Cue<'a> {
     pub start: f64,
     pub end: f64,
     pub text: &'a str,
+    pub top: Option<&'a str>,
 }
 
 fn srt_time(t: f64) -> String {
@@ -314,7 +316,9 @@ fn srt_time(t: f64) -> String {
     format!("{h:02}:{m:02}:{s:02},{milli:03}")
 }
 
-/// Build an SRT document from cues (empty-text cues skipped).
+/// Build an SRT document from cues (empty-text cues skipped). When a cue carries
+/// a non-empty `top` line it is emitted above the main text (bilingual: source
+/// over Vietnamese).
 pub fn build_srt(cues: &[Cue]) -> String {
     let mut out = String::new();
     let mut n = 1;
@@ -322,15 +326,36 @@ pub fn build_srt(cues: &[Cue]) -> String {
         if c.text.trim().is_empty() {
             continue;
         }
+        let body = match c.top {
+            Some(t) if !t.trim().is_empty() => format!("{}\n{}", t.trim(), c.text.trim()),
+            _ => c.text.trim().to_string(),
+        };
         out.push_str(&format!(
-            "{n}\n{} --> {}\n{}\n\n",
+            "{n}\n{} --> {}\n{body}\n\n",
             srt_time(c.start),
             srt_time(c.end.max(c.start + 0.1)),
-            c.text.trim()
         ));
         n += 1;
     }
     out
+}
+
+/// Convert a `#RRGGBB` hex colour to an ASS `&HBBGGRR&` literal (libass byte
+/// order is B,G,R with a leading alpha of `00` = fully opaque). Falls back to
+/// white (`&H00FFFFFF&`) when the input isn't a clean 6-digit hex.
+fn ass_color(hex: &str) -> String {
+    let t = hex.trim().trim_start_matches('#');
+    if t.len() == 6 && t.bytes().all(|b| b.is_ascii_hexdigit()) {
+        let (r, g, b) = (&t[0..2], &t[2..4], &t[4..6]);
+        format!(
+            "&H00{}{}{}&",
+            b.to_uppercase(),
+            g.to_uppercase(),
+            r.to_uppercase()
+        )
+    } else {
+        "&H00FFFFFF&".to_string()
+    }
 }
 
 /// Escape a path for use inside the ffmpeg `subtitles=` filter value.
@@ -354,6 +379,10 @@ pub struct ExportOpts<'a> {
     pub subtitles_soft: Option<&'a Path>,
     /// Subtitle vertical margin from the bottom, in pixels (libass `MarginV`).
     pub sub_margin_v: Option<u32>,
+    /// Burned-subtitle font size in pixels (libass `FontSize`).
+    pub sub_size: Option<f64>,
+    /// Burned-subtitle colour as a `#RRGGBB` hex string (libass `PrimaryColour`).
+    pub sub_color: Option<&'a str>,
     /// Blur a rectangle `(x, y, w, h)` (fractions of the frame) to hide original
     /// hard-coded subtitles (re-encodes).
     pub blur: Option<(f64, f64, f64, f64)>,
@@ -440,12 +469,23 @@ pub fn export_video_args(video: &Path, voice: &Path, out: &Path, opts: &ExportOp
         } else {
             vlabel.clone()
         };
-        // Comma-free style: commas inside `force_style` are parsed as filtergraph
-        // separators and break the graph. MarginV (bottom alignment is default)
-        // is enough to reposition vertically.
-        let style = match opts.sub_margin_v {
-            Some(m) => format!(":force_style='MarginV={m}'"),
-            None => String::new(),
+        // libass `force_style` properties (MarginV, FontSize, PrimaryColour).
+        // Inside a filtergraph a bare comma is a filter separator, so the entries
+        // are joined with an escaped `\,` which ffmpeg passes through to libass.
+        let mut props: Vec<String> = Vec::new();
+        if let Some(m) = opts.sub_margin_v {
+            props.push(format!("MarginV={m}"));
+        }
+        if let Some(sz) = opts.sub_size {
+            props.push(format!("FontSize={}", sz.round() as i64));
+        }
+        if let Some(c) = opts.sub_color {
+            props.push(format!("PrimaryColour={}", ass_color(c)));
+        }
+        let style = if props.is_empty() {
+            String::new()
+        } else {
+            format!(":force_style='{}'", props.join("\\,"))
         };
         vchain.push(format!(
             "{base}subtitles='{}'{style}[vs]",
@@ -799,22 +839,46 @@ mod tests {
                 start: 0.0,
                 end: 1.5,
                 text: "Xin chào",
+                top: None,
             },
             Cue {
                 start: 2.0,
                 end: 2.0,
                 text: "  ",
+                top: None,
             }, // empty → skipped
             Cue {
                 start: 61.25,
                 end: 63.0,
                 text: "Tạm biệt",
+                top: None,
             },
         ];
         let srt = build_srt(&cues);
         assert!(srt.contains("1\n00:00:00,000 --> 00:00:01,500\nXin chào"));
         assert!(srt.contains("2\n00:01:01,250 --> 00:01:03,000\nTạm biệt"));
         assert!(!srt.contains("3\n")); // only two non-empty cues
+    }
+
+    #[test]
+    fn build_srt_bilingual_emits_source_over_vietnamese() {
+        let cues = [Cue {
+            start: 0.0,
+            end: 1.5,
+            text: "Xin chào",
+            top: Some("你好"),
+        }];
+        let srt = build_srt(&cues);
+        // source line sits above the Vietnamese within the same cue block
+        assert!(srt.contains("1\n00:00:00,000 --> 00:00:01,500\n你好\nXin chào\n"));
+    }
+
+    #[test]
+    fn ass_color_converts_hex_to_bgr() {
+        // #FFE082 → &H0082E0FF& (B,G,R byte order, alpha 00)
+        assert_eq!(ass_color("#FFE082"), "&H0082E0FF&");
+        assert_eq!(ass_color("#ffffff"), "&H00FFFFFF&");
+        assert_eq!(ass_color("bogus"), "&H00FFFFFF&"); // fallback
     }
 
     #[test]
@@ -825,6 +889,8 @@ mod tests {
             subtitles_burn: None,
             subtitles_soft: None,
             sub_margin_v: None,
+            sub_size: None,
+            sub_color: None,
             blur: None,
             frame: None,
         };
@@ -844,6 +910,8 @@ mod tests {
             subtitles_burn: Some(&sub),
             subtitles_soft: None,
             sub_margin_v: Some(60),
+            sub_size: Some(36.0),
+            sub_color: Some("#FFE082"),
             blur: Some((0.1, 0.84, 0.8, 0.14)),
             frame: Some((1000, 500)),
         };
@@ -854,7 +922,9 @@ mod tests {
         assert!(j.contains("alphamerge"));
         assert!(j.contains("drawbox=x=13:y=13:w=774:h=44"));
         assert!(j.contains("overlay=100:420"));
-        assert!(j.contains("force_style='MarginV=60'"));
+        // force_style carries margin + size + colour, entries joined with escaped
+        // commas so the filtergraph parser doesn't split them.
+        assert!(j.contains("force_style='MarginV=60\\,FontSize=36\\,PrimaryColour=&H0082E0FF&'"));
         assert!(!j.contains(",force_style"));
         assert!(j.contains("-c:v libx264"));
         assert!(j.contains("[vs]"));
@@ -868,6 +938,8 @@ mod tests {
             subtitles_burn: None,
             subtitles_soft: None,
             sub_margin_v: None,
+            sub_size: None,
+            sub_color: None,
             blur: Some((0.1, 0.84, 0.8, 0.14)),
             frame: None,
         };
@@ -885,6 +957,8 @@ mod tests {
             subtitles_burn: None,
             subtitles_soft: Some(&sub),
             sub_margin_v: None,
+            sub_size: None,
+            sub_color: None,
             blur: None,
             frame: None,
         };

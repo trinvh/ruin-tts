@@ -42,6 +42,12 @@ pub struct DubProject {
     pub blur_h: f64,
     /// Vertical position of burned subtitles (fraction of height; 0=top, 1=bottom).
     pub sub_y: f64,
+    /// Font size (px) of burned subtitles.
+    pub sub_size: f64,
+    /// Colour of burned subtitles, as a `#RRGGBB` hex string.
+    pub sub_color: String,
+    /// Render the source text above the Vietnamese (two lines per cue).
+    pub sub_bilingual: bool,
     pub vn_track_path: Option<String>,
     pub export_path: Option<String>,
     pub created_at: String,

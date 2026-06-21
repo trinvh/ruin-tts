@@ -413,6 +413,11 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
                 start: s.start_s,
                 end: s.end_s,
                 text: &s.text_vi,
+                top: if project.sub_bilingual {
+                    Some(s.text_src.as_str())
+                } else {
+                    None
+                },
             })
             .collect();
         let srt = media::build_srt(&cues);
@@ -447,6 +452,16 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
             None
         },
         sub_margin_v,
+        sub_size: if use_burn {
+            Some(project.sub_size)
+        } else {
+            None
+        },
+        sub_color: if use_burn {
+            Some(project.sub_color.as_str())
+        } else {
+            None
+        },
         blur: if project.blur_subtitle {
             Some((
                 project.blur_x,

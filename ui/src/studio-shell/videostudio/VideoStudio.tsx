@@ -50,6 +50,14 @@ export function VideoStudio({ projectId, title: initialTitle }: Props) {
     if (proj.vn_volume > 0) lastVol.current.vn = proj.vn_volume;
   }, [proj?.original_volume, proj?.vn_volume]);
 
+  // Seed the live-preview subtitle style from the persisted project so the
+  // editor opens reflecting saved size/colour/bilingual values.
+  useEffect(() => {
+    if (!proj) return;
+    actions.seedSubStyle({ size: proj.sub_size, color: proj.sub_color, bilingual: proj.sub_bilingual });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proj?.sub_size, proj?.sub_color, proj?.sub_bilingual]);
+
   const trackCtl: TrackCtl = {
     kindOf: trackAudioKind,
     hasEye: (key) => trackAudioKind(key) !== null,
