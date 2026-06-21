@@ -1,9 +1,9 @@
 name: build
 
-# Builds the Rust servers/CLI and the Tauri desktop app for the two supported
-# desktop targets — macOS Apple Silicon (M-series) and Windows x64 — and uploads
-# the binaries + installers as artifacts. On a `v*` tag it also publishes them to
-# a GitHub Release.
+# Builds the Rust servers/CLI and the Tauri desktop app for the supported desktop
+# targets — macOS Apple Silicon (M-series), macOS Intel (x86_64) and Windows x64 —
+# and uploads the binaries + installers as artifacts. On a `v*` tag it also
+# publishes them to a GitHub Release.
 on:
   push:
     branches: [main]
@@ -32,6 +32,10 @@ jobs:
             os: macos-14 # arm64 runner → aarch64-apple-darwin
             ext: ""
             triple: aarch64-apple-darwin
+          - label: macOS (Intel)
+            os: macos-13 # x86_64 runner → x86_64-apple-darwin
+            ext: ""
+            triple: x86_64-apple-darwin
           - label: Windows (x64)
             os: windows-latest
             ext: ".exe"
@@ -89,6 +93,26 @@ jobs:
           foreach ($b in 'vieneu-server','studio-server','media-ai') {
             Copy-Item "target/release/$b.exe" "ui/src-tauri/binaries/$b-${{ matrix.triple }}.exe"
           }
+
+      # On Intel macOS, ort uses load-dynamic (no prebuilt) → ship libonnxruntime
+      # so the bundled app runs without a system ONNX Runtime. Version must match
+      # ort-sys rc.12 (1.24.2); fall back to Homebrew if the upstream archive is
+      # unavailable. Bundled via tauri.conf resources/; lib.rs sets ORT_DYLIB_PATH.
+      - name: Bundle ONNX Runtime (Intel macOS only)
+        if: matrix.triple == 'x86_64-apple-darwin'
+        run: |
+          mkdir -p ui/src-tauri/runtime
+          VER=1.24.2
+          URL="https://github.com/microsoft/onnxruntime/releases/download/v${VER}/onnxruntime-osx-x86_64-${VER}.tgz"
+          if curl -fsSL "$URL" -o /tmp/ort.tgz; then
+            tar -xzf /tmp/ort.tgz -C /tmp
+            cp "/tmp/onnxruntime-osx-x86_64-${VER}/lib/libonnxruntime.${VER}.dylib" ui/src-tauri/runtime/libonnxruntime.dylib
+          else
+            echo "upstream archive missing — falling back to Homebrew onnxruntime"
+            brew install onnxruntime
+            cp "$(brew --prefix onnxruntime)/lib/libonnxruntime.dylib" ui/src-tauri/runtime/libonnxruntime.dylib
+          fi
+          ls -la ui/src-tauri/runtime
 
       - name: Install UI dependencies
         run: pnpm -C ui install --frozen-lockfile

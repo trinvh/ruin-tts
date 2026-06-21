@@ -1,0 +1,2 @@
+# Holds libonnxruntime.dylib on Intel-macOS bundle builds (see CI).
+# Other platforms link ONNX Runtime statically; this stays empty.

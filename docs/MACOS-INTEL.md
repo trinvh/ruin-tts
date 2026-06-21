@@ -53,3 +53,14 @@ point `ORT_DYLIB_PATH` at its `lib/libonnxruntime.dylib` instead.
 Everything else (the studio server, the Tauri shell, ffmpeg, the dubbing sidecar)
 builds and runs natively on Intel Macs — see also `docs/WINDOWS.md` for the
 shared notes.
+
+## 3. CI builds a self-contained Intel app
+
+`.github/workflows/build.yml` has a `macOS (Intel)` matrix entry (`macos-13`,
+`x86_64-apple-darwin`). For that target it downloads ONNX Runtime **1.24.2**
+(matching `ort-sys` rc.12; Homebrew fallback) into `ui/src-tauri/runtime/`, which
+is bundled via `tauri.conf.json` `resources`. At launch the Tauri shell
+(`lib.rs`) sets `ORT_DYLIB_PATH` to that bundled `libonnxruntime.dylib` for the
+spawned sidecars — so the **installer runs without a system ONNX Runtime**. On
+Apple Silicon / Windows the dir stays empty and `ORT_DYLIB_PATH` is left unset
+(ort is linked statically there).

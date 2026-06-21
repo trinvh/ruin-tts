@@ -178,6 +178,15 @@ pub fn run() {
             let (ff, fp) = ffmpeg_paths(app.handle());
             std::env::set_var("FFMPEG_PATH", &ff);
             std::env::set_var("FFPROBE_PATH", &fp);
+            // On Intel macOS, ort loads ONNX Runtime dynamically — point the
+            // sidecars at the bundled dylib if present (no-op on arm64 / Windows
+            // where ort is linked statically).
+            if let Ok(res) = app.path().resource_dir() {
+                let dylib = res.join("runtime").join("libonnxruntime.dylib");
+                if dylib.is_file() {
+                    std::env::set_var("ORT_DYLIB_PATH", &dylib);
+                }
+            }
             if let Some(c) = spawn("VIENEU_SERVER_BIN", "vieneu-server", &["--addr", TTS_ADDR, "--workers", "2"]) {
                 kids.push(c);
             } else {
