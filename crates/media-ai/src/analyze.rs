@@ -1,26 +1,32 @@
-//! Orchestration: ASR → per-segment wav2vec2 features → cluster into speakers →
-//! per-speaker age/gender. Replaces the Python `analyze.py` flow (which used a
-//! separate pyannote pass) with embedding clustering over the ASR segments.
+//! Orchestration: ASR → per-segment WavLM speaker embedding → cluster into
+//! speakers → per-speaker age/gender. Replaces the Python `analyze.py` flow
+//! (which used a separate pyannote pass).
 
-use crate::agegender::{SegmentFeatures, Wav2Vec2};
+use crate::agegender::AgeGenderModel;
 use crate::asr::Asr;
 use crate::audio::{self, SR};
 use crate::diarize::assign_speakers;
+use crate::embed::Embedder;
 use crate::types::{AnalyzeResponse, Segment, Speaker};
 use anyhow::Result;
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+
+/// Cap on the audio fed to the age/gender model per speaker (seconds).
+const AGEGENDER_MAX_SECS: f64 = 12.0;
 
 pub struct Analyzer {
     asr: Asr,
-    model: Wav2Vec2,
+    embedder: Embedder,
+    agegender: AgeGenderModel,
     threshold: f32,
 }
 
 impl Analyzer {
-    pub fn new(asr: Asr, model: Wav2Vec2, threshold: f32) -> Self {
+    pub fn new(asr: Asr, embedder: Embedder, agegender: AgeGenderModel, threshold: f32) -> Self {
         Self {
             asr,
-            model,
+            embedder,
+            agegender,
             threshold,
         }
     }
@@ -34,35 +40,30 @@ impl Analyzer {
         let samples = audio::load_wav_16k_mono(audio_path)?;
         let asr = self.asr.transcribe(&samples, hint_lang)?;
 
-        // Per-segment wav2vec2 features (embedding + age/gender), when the model
-        // is loaded — `None` per segment otherwise.
-        let feats: Vec<Option<SegmentFeatures>> = asr
+        // Per-segment speaker embedding (WavLM), when the model is loaded.
+        let embs: Vec<Option<Vec<f32>>> = asr
             .segments
             .iter()
             .map(|s| {
-                let a = (s.start * SR as f64) as usize;
-                let b = ((s.end * SR as f64) as usize).min(samples.len());
-                if a < b {
-                    self.model.infer(&samples[a..b])
-                } else {
+                let slice = slice_for(&samples, s.start, s.end);
+                if slice.is_empty() {
                     None
+                } else {
+                    self.embedder.infer(slice)
                 }
             })
             .collect();
 
         // Diarization: cluster the segments that produced an embedding.
-        let with_emb: Vec<usize> = feats
+        let with_emb: Vec<usize> = embs
             .iter()
             .enumerate()
-            .filter_map(|(i, f)| f.as_ref().map(|_| i))
+            .filter_map(|(i, e)| e.as_ref().map(|_| i))
             .collect();
         let mut speaker_of = vec!["SPEAKER_00".to_string(); asr.segments.len()];
         if !with_emb.is_empty() {
-            let embs: Vec<Vec<f32>> = with_emb
-                .iter()
-                .map(|&i| feats[i].as_ref().unwrap().embedding.clone())
-                .collect();
-            let labels = assign_speakers(&embs, self.threshold, num_speakers.map(|n| n as usize));
+            let vecs: Vec<Vec<f32>> = with_emb.iter().map(|&i| embs[i].clone().unwrap()).collect();
+            let labels = assign_speakers(&vecs, self.threshold, num_speakers.map(|n| n as usize));
             for (k, &i) in with_emb.iter().enumerate() {
                 speaker_of[i] = labels[k].clone();
             }
@@ -82,31 +83,17 @@ impl Analyzer {
             })
             .collect();
 
-        // Per-speaker age/gender: duration-weighted aggregate of segment features.
-        let mut by_speaker: BTreeMap<String, Vec<(f64, Option<f64>, Option<String>)>> =
-            BTreeMap::new();
-        for s in &segments {
-            by_speaker.entry(s.speaker.clone()).or_default();
-        }
-        for (i, seg) in asr.segments.iter().enumerate() {
-            let dur = (seg.end - seg.start).max(0.01);
-            let (age, gender) = match &feats[i] {
-                Some(f) => (f.age, f.gender.clone()),
-                None => (None, None),
-            };
-            by_speaker
-                .get_mut(&speaker_of[i])
-                .unwrap()
-                .push((dur, age, gender));
-        }
-        let speakers: Vec<Speaker> = by_speaker
+        // Per-speaker age/gender on that speaker's concatenated audio.
+        let speaker_ids: BTreeSet<&str> = segments.iter().map(|s| s.speaker.as_str()).collect();
+        let speakers: Vec<Speaker> = speaker_ids
             .into_iter()
-            .map(|(speaker, items)| {
-                let (age, gender) = aggregate(&items);
+            .map(|spk| {
+                let clip = speaker_samples(&samples, &segments, spk, AGEGENDER_MAX_SECS);
+                let ag = self.agegender.predict(&clip);
                 Speaker {
-                    speaker,
-                    gender,
-                    age,
+                    speaker: spk.to_string(),
+                    gender: ag.gender,
+                    age: ag.age,
                 }
             })
             .collect();
@@ -124,40 +111,55 @@ impl Analyzer {
     }
 }
 
+fn slice_for(samples: &[f32], start: f64, end: f64) -> &[f32] {
+    let a = (start * SR as f64).max(0.0) as usize;
+    let b = ((end * SR as f64) as usize).min(samples.len());
+    if a < b {
+        &samples[a..b]
+    } else {
+        &[]
+    }
+}
+
 fn round3(x: f64) -> f64 {
     (x * 1000.0).round() / 1000.0
 }
 
-fn round1(x: f64) -> f64 {
-    (x * 10.0).round() / 10.0
-}
-
-/// Duration-weighted aggregate: mean age over segments that have one, and the
-/// gender with the most total speech duration.
-fn aggregate(items: &[(f64, Option<f64>, Option<String>)]) -> (Option<f64>, Option<String>) {
-    let mut age_sum = 0.0;
-    let mut age_w = 0.0;
-    let mut votes: BTreeMap<String, f64> = BTreeMap::new();
-    for (dur, age, gender) in items {
-        if let Some(a) = age {
-            age_sum += a * dur;
-            age_w += dur;
+/// Concatenate a speaker's segment audio (in order), up to `max_secs`, for the
+/// age/gender pass. Returns an empty vec if the speaker has no usable audio.
+fn speaker_samples(
+    samples: &[f32],
+    segments: &[Segment],
+    speaker: &str,
+    max_secs: f64,
+) -> Vec<f32> {
+    let budget = (max_secs * SR as f64) as usize;
+    let mut out: Vec<f32> = Vec::new();
+    for seg in segments.iter().filter(|s| s.speaker == speaker) {
+        if out.len() >= budget {
+            break;
         }
-        if let Some(g) = gender {
-            *votes.entry(g.clone()).or_insert(0.0) += dur;
-        }
+        let slice = slice_for(samples, seg.start, seg.end);
+        let take = slice.len().min(budget - out.len());
+        out.extend_from_slice(&slice[..take]);
     }
-    let age = (age_w > 0.0).then(|| round1(age_sum / age_w));
-    let gender = votes
-        .into_iter()
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(g, _)| g);
-    (age, gender)
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn seg(id: i64, start: f64, end: f64, speaker: &str) -> Segment {
+        Segment {
+            id,
+            start,
+            end,
+            speaker: speaker.into(),
+            text_src: String::new(),
+            lang: String::new(),
+        }
+    }
 
     #[test]
     fn round3_rounds_to_milliseconds() {
@@ -166,30 +168,34 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_weights_age_by_duration() {
-        let items = vec![
-            (2.0, Some(30.0), Some("male".to_string())),
-            (1.0, Some(60.0), Some("male".to_string())),
+    fn speaker_samples_concatenates_only_that_speaker() {
+        // 3 s of audio at 16 kHz; ramp so we can tell regions apart.
+        let samples: Vec<f32> = (0..SR * 3).map(|i| i as f32).collect();
+        let segs = vec![
+            seg(0, 0.0, 1.0, "SPEAKER_00"),
+            seg(1, 1.0, 2.0, "SPEAKER_01"),
+            seg(2, 2.0, 3.0, "SPEAKER_00"),
         ];
-        let (age, gender) = aggregate(&items);
-        assert_eq!(age, Some(40.0)); // (30*2 + 60*1) / 3
-        assert_eq!(gender.as_deref(), Some("male"));
+        let s0 = speaker_samples(&samples, &segs, "SPEAKER_00", 10.0);
+        // Two 1 s segments for SPEAKER_00.
+        assert_eq!(s0.len(), SR as usize * 2);
+        // First sample is from t=0, and the join is at the start of t=2 s.
+        assert_eq!(s0[0], 0.0);
+        assert_eq!(s0[SR as usize], (SR * 2) as f32);
     }
 
     #[test]
-    fn aggregate_gender_is_duration_majority() {
-        let items = vec![
-            (3.0, None, Some("female".to_string())),
-            (1.0, None, Some("male".to_string())),
-        ];
-        let (age, gender) = aggregate(&items);
-        assert_eq!(age, None);
-        assert_eq!(gender.as_deref(), Some("female"));
+    fn speaker_samples_respects_the_cap() {
+        let samples: Vec<f32> = vec![1.0; SR as usize * 5];
+        let segs = vec![seg(0, 0.0, 5.0, "SPEAKER_00")];
+        let s = speaker_samples(&samples, &segs, "SPEAKER_00", 2.0);
+        assert_eq!(s.len(), SR as usize * 2); // capped at 2 s
     }
 
     #[test]
-    fn aggregate_empty_is_none() {
-        assert_eq!(aggregate(&[]), (None, None));
-        assert_eq!(aggregate(&[(1.0, None, None)]), (None, None));
+    fn speaker_samples_empty_when_no_match() {
+        let samples = vec![1.0; SR as usize];
+        let segs = vec![seg(0, 0.0, 1.0, "SPEAKER_00")];
+        assert!(speaker_samples(&samples, &segs, "SPEAKER_09", 10.0).is_empty());
     }
 }

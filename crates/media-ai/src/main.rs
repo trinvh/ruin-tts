@@ -8,7 +8,9 @@ mod asr;
 mod audio;
 mod cluster;
 mod diarize;
+mod embed;
 mod models;
+mod onnx;
 mod types;
 
 use std::sync::Arc;
@@ -54,6 +56,14 @@ struct Args {
     /// Local path to the age/gender ONNX (overrides the repo download).
     #[arg(long, env = "MEDIA_AI_AGEGENDER_PATH")]
     agegender_path: Option<String>,
+    /// HF repo holding the exported speaker-embedding ONNX (WavLM-SV).
+    #[arg(long, env = "MEDIA_AI_EMBED_REPO")]
+    embed_repo: Option<String>,
+    #[arg(long, env = "MEDIA_AI_EMBED_MODEL", default_value = "model.onnx")]
+    embed_model: String,
+    /// Local path to the speaker-embedding ONNX (overrides the repo download).
+    #[arg(long, env = "MEDIA_AI_EMBED_PATH")]
+    embed_path: Option<String>,
     /// Cosine-similarity threshold for diarization clustering.
     #[arg(long, env = "MEDIA_AI_DIARIZE_THRESHOLD")]
     diarize_threshold: Option<f32>,
@@ -69,6 +79,21 @@ fn resolve_agegender(args: &Args) -> Result<Option<std::path::PathBuf>> {
         Some(repo) => Ok(Some(
             models::hf_file(repo, &args.agegender_model, args.hf_token.clone())
                 .context("tải model age/gender")?,
+        )),
+        None => Ok(None),
+    }
+}
+
+/// Resolve the optional speaker-embedding ONNX (WavLM-SV): explicit local path,
+/// else an HF repo download, else None (diarization → single speaker).
+fn resolve_embed(args: &Args) -> Result<Option<std::path::PathBuf>> {
+    if let Some(p) = &args.embed_path {
+        return Ok(Some(std::path::PathBuf::from(p)));
+    }
+    match &args.embed_repo {
+        Some(repo) => Ok(Some(
+            models::hf_file(repo, &args.embed_model, args.hf_token.clone())
+                .context("tải model speaker-embedding")?,
         )),
         None => Ok(None),
     }
@@ -97,9 +122,11 @@ async fn main() -> Result<()> {
     .context("tải model whisper")?;
     let asr = asr::Asr::load(model_path.to_string_lossy().as_ref())?;
     let agegender_path = resolve_agegender(&args)?;
-    let model = agegender::Wav2Vec2::load(agegender_path.as_deref())?;
+    let agegender = agegender::AgeGenderModel::load(agegender_path.as_deref())?;
+    let embed_path = resolve_embed(&args)?;
+    let embedder = embed::Embedder::load(embed_path.as_deref())?;
     let threshold = args.diarize_threshold.unwrap_or(diarize::DEFAULT_THRESHOLD);
-    let analyzer = Analyzer::new(asr, model, threshold);
+    let analyzer = Analyzer::new(asr, embedder, agegender, threshold);
 
     let state = Arc::new(AppState { analyzer });
     let app = Router::new()
