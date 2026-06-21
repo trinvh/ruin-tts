@@ -43,10 +43,6 @@ impl AgeGenderModel {
         Ok(Self { session })
     }
 
-    pub fn enabled(&self) -> bool {
-        self.session.is_some()
-    }
-
     /// Predict age + gender for one speaker's (concatenated) audio. Returns
     /// unknown on no-model / empty / inference error (caller degrades).
     pub fn predict(&self, samples: &[f32]) -> AgeGender {

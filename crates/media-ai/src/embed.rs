@@ -48,10 +48,6 @@ impl Embedder {
         }
     }
 
-    pub fn enabled(&self) -> bool {
-        self.session.is_some()
-    }
-
     /// Embed one segment's audio → a 512-d unit vector, or `None` (no model /
     /// empty / inference error — caller degrades to a single speaker).
     pub fn infer(&self, samples: &[f32]) -> Option<Vec<f32>> {

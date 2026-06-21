@@ -89,10 +89,6 @@ impl Segmenter {
         Ok(Self { session })
     }
 
-    pub fn enabled(&self) -> bool {
-        self.session.is_some()
-    }
-
     /// Overlap intervals (seconds) over the whole clip. Non-overlapping 10 s
     /// windows; the last is zero-padded and trimmed to the real audio length.
     pub fn overlaps(&self, samples: &[f32]) -> Vec<(f64, f64)> {
