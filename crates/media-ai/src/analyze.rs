@@ -8,6 +8,7 @@ use crate::audio::{self, SR};
 use crate::diarize::assign_speakers;
 use crate::embed::Embedder;
 use crate::segment::Segmenter;
+use crate::separate::Separator;
 use crate::types::{AnalyzeResponse, OverlapSpan, Segment, Speaker};
 use anyhow::Result;
 use std::collections::BTreeSet;
@@ -20,6 +21,7 @@ pub struct Analyzer {
     embedder: Embedder,
     agegender: AgeGenderModel,
     segmenter: Segmenter,
+    separator: Separator,
     threshold: f32,
 }
 
@@ -29,6 +31,7 @@ impl Analyzer {
         embedder: Embedder,
         agegender: AgeGenderModel,
         segmenter: Segmenter,
+        separator: Separator,
         threshold: f32,
     ) -> Self {
         Self {
@@ -36,8 +39,40 @@ impl Analyzer {
             embedder,
             agegender,
             segmenter,
+            separator,
             threshold,
         }
+    }
+
+    /// Per-speaker transcripts for one overlap region: separate the mixed audio
+    /// into streams, then ASR each. Empty when no separation model.
+    fn overlap_texts(
+        &self,
+        samples: &[f32],
+        start: f64,
+        end: f64,
+        hint_lang: Option<&str>,
+    ) -> Vec<String> {
+        let mix = slice_for(samples, start, end);
+        if mix.is_empty() {
+            return Vec::new();
+        }
+        self.separator
+            .separate(mix)
+            .into_iter()
+            .filter_map(|stream| {
+                let a = self.asr.transcribe(&stream, hint_lang).ok()?;
+                let t = a
+                    .segments
+                    .iter()
+                    .map(|s| s.text.trim())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .trim()
+                    .to_string();
+                (!t.is_empty()).then_some(t)
+            })
+            .collect()
     }
 
     pub fn analyze(
@@ -111,12 +146,16 @@ impl Analyzer {
         let gender_note = (!any_gender && !speakers.is_empty())
             .then(|| "age/gender model chưa được cấu hình".to_string());
 
-        // Overlapping-speech spans (pyannote segmentation), for the dub export.
+        // Overlapping-speech spans (pyannote segmentation); for each, recover the
+        // per-speaker transcript via source separation (if a model is configured).
         let overlaps = self
             .segmenter
             .overlaps(&samples)
             .into_iter()
-            .map(|(start, end)| OverlapSpan { start, end })
+            .map(|(start, end)| {
+                let texts = self.overlap_texts(&samples, start, end, hint_lang);
+                OverlapSpan { start, end, texts }
+            })
             .collect();
 
         Ok(AnalyzeResponse {

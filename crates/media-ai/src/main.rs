@@ -12,6 +12,7 @@ mod embed;
 mod models;
 mod onnx;
 mod segment;
+mod separate;
 mod types;
 
 use std::sync::Arc;
@@ -92,6 +93,19 @@ struct Args {
     /// Local path to the pyannote segmentation ONNX (overrides the repo).
     #[arg(long, env = "MEDIA_AI_SEGMENT_PATH")]
     segment_path: Option<String>,
+    /// HF repo holding the ConvTasNet separation ONNX (per-speaker text in
+    /// overlaps). Defaults to the project repo; missing → no overlap separation.
+    #[arg(long, env = "MEDIA_AI_SEPARATE_REPO", default_value = MODELS_REPO)]
+    separate_repo: Option<String>,
+    #[arg(
+        long,
+        env = "MEDIA_AI_SEPARATE_MODEL",
+        default_value = "separation.onnx"
+    )]
+    separate_model: String,
+    /// Local path to the separation ONNX (overrides the repo download).
+    #[arg(long, env = "MEDIA_AI_SEPARATE_PATH")]
+    separate_path: Option<String>,
     /// Cosine-similarity threshold for diarization clustering.
     #[arg(long, env = "MEDIA_AI_DIARIZE_THRESHOLD")]
     diarize_threshold: Option<f32>,
@@ -168,8 +182,16 @@ async fn main() -> Result<()> {
         "segmentation",
     );
     let segmenter = segment::Segmenter::load(segment_path.as_deref())?;
+    let separate_path = resolve_model(
+        &args.separate_path,
+        &args.separate_repo,
+        &args.separate_model,
+        args.hf_token.clone(),
+        "separation",
+    );
+    let separator = separate::Separator::load(separate_path.as_deref())?;
     let threshold = args.diarize_threshold.unwrap_or(diarize::DEFAULT_THRESHOLD);
-    let analyzer = Analyzer::new(asr, embedder, agegender, segmenter, threshold);
+    let analyzer = Analyzer::new(asr, embedder, agegender, segmenter, separator, threshold);
 
     let state = Arc::new(AppState { analyzer });
     let app = Router::new()

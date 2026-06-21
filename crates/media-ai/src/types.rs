@@ -28,11 +28,15 @@ pub struct Speaker {
     pub age: Option<f64>,
 }
 
-/// A time span where ≥2 speakers talk at once (pyannote segmentation).
+/// A time span where ≥2 speakers talk at once (pyannote segmentation), with the
+/// per-speaker transcripts recovered by source separation (`texts`, one per
+/// separated stream) when a separation model is configured.
 #[derive(Debug, Serialize)]
 pub struct OverlapSpan {
     pub start: f64,
     pub end: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

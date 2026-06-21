@@ -22,8 +22,13 @@ echo "==> exporting speaker-embedding (WavLM-base-plus-sv) → speaker-embedding
 echo "==> exporting age/gender (audeering wav2vec2) → agegender.onnx"
 "${PY[@]}" tools/export-agegender-onnx.py --out "$OUT/agegender.onnx"
 
+echo "==> exporting separation (ConvTasNet Libri2Mix-16k) → separation.onnx"
+SEP=(uv run --with asteroid --with requests --with onnx --with onnxscript --with "numpy<2" python)
+"${SEP[@]}" tools/export-separation-onnx.py --out "$OUT/separation.onnx"
+
 echo "==> uploading to https://huggingface.co/$REPO"
 "${HF[@]}" upload "$REPO" "$OUT/speaker-embedding.onnx" speaker-embedding.onnx
 "${HF[@]}" upload "$REPO" "$OUT/agegender.onnx" agegender.onnx
+"${HF[@]}" upload "$REPO" "$OUT/separation.onnx" separation.onnx
 
 echo "done — media-ai will download these by default (MEDIA_AI_EMBED_REPO/_AGEGENDER_REPO=$REPO)."
