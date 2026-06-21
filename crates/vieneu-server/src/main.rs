@@ -48,8 +48,29 @@ struct Args {
     cache_dir: Option<String>,
 }
 
+/// When launched by the desktop shell (`DIE_WITH_PARENT=1` + a piped stdin), exit
+/// as soon as that stdin closes — i.e. when the parent dies — so we never linger
+/// holding the port. No-op for standalone runs (env unset).
+fn die_with_parent() {
+    if std::env::var_os("DIE_WITH_PARENT").is_none() {
+        return;
+    }
+    std::thread::spawn(|| {
+        use std::io::Read;
+        let mut buf = [0u8; 64];
+        let mut stdin = std::io::stdin();
+        loop {
+            match stdin.read(&mut buf) {
+                Ok(0) | Err(_) => std::process::exit(0),
+                Ok(_) => {}
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    die_with_parent();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

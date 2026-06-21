@@ -179,8 +179,14 @@ fn candidates(env_var: &str, name: &str) -> Vec<PathBuf> {
 fn spawn(env_var: &str, name: &str, args: &[&str]) -> Option<Child> {
     let bin = candidates(env_var, name).into_iter().find(|p| p.exists())?;
     eprintln!("[tauri] launching {name}: {}", bin.display());
+    // Give the child a piped stdin we hold open + DIE_WITH_PARENT=1. If this
+    // process dies by any means (Cmd+Q, Ctrl+C of `tauri dev`, crash), the OS
+    // closes the pipe → the child reads stdin EOF and exits, so it never lingers
+    // holding its port. The child's stdin handle lives inside the returned Child.
     Command::new(bin)
         .args(args)
+        .env("DIE_WITH_PARENT", "1")
+        .stdin(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| eprintln!("[tauri] failed to spawn {name}: {e}"))
         .ok()
