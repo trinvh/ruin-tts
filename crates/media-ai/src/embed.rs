@@ -55,6 +55,23 @@ impl Embedder {
         if samples.is_empty() {
             return None;
         }
+        // The TDNN/conv stack has a receptive field of a few hundred ms; a tiny
+        // segment (e.g. a 5-sample diarization sliver) makes the conv fail with
+        // "Invalid input shape". Zero-pad up to a safe minimum (~1s @ 16 kHz) so
+        // short-but-real segments still get an embedding instead of being dropped.
+        const MIN_SAMPLES: usize = 16_000;
+        let padded: Vec<f32>;
+        let samples: &[f32] = if samples.len() < MIN_SAMPLES {
+            padded = samples
+                .iter()
+                .copied()
+                .chain(std::iter::repeat(0.0))
+                .take(MIN_SAMPLES)
+                .collect();
+            &padded
+        } else {
+            samples
+        };
         let res = run_waveform(mtx, samples, |out| {
             let v = out
                 .get(self.output.as_str())
