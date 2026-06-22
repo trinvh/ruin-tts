@@ -1,15 +1,17 @@
 # Beesoft Studio — common commands. Run `make` (or `make help`) to list targets.
 .DEFAULT_GOAL := help
-.PHONY: help dev build sidecars test fmt clippy clean upload-models
+.PHONY: help dev dev-bundled build sidecars test fmt clippy clean upload-models
 
 # Host target triple (e.g. aarch64-apple-darwin) for staging bundled sidecars.
 TRIPLE := $(shell rustc -vV | sed -n 's/host: //p')
 SIDECARS := vieneu-server studio-server media-ai
 MAIN_CRATES := -p vieneu-core -p vieneu-server -p vieneu-cli -p studio -p media-ai
 
-dev: sidecars ## Run the desktop app in dev mode (UI hot-reload + Rust sidecars)
-	@# Kill any sidecars left over from a previous run (e.g. orphans from before
-	@# the die-with-parent fix) so a fresh `make dev` never clashes on ports.
+dev: ## Run the app with FULL hot-reload (UI via Vite + Rust sidecars via cargo-watch)
+	bash scripts/dev.sh
+
+dev-bundled: sidecars ## Run the app the way it ships (prebuilt sidecars, no Rust hot-reload)
+	@# Kill any sidecars left over from a previous run so launching never clashes.
 	@-pkill -f 'release/vieneu-server' 2>/dev/null; pkill -f 'release/studio-server' 2>/dev/null; pkill -f 'release/media-ai' 2>/dev/null; true
 	pnpm -C ui install
 	pnpm -C ui tauri dev

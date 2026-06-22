@@ -33,3 +33,6 @@ __pycache__
 
 # Sidecar binaries staged for Tauri bundling (CI build outputs)
 /ui/src-tauri/binaries
+
+# Dev hot-reload state (make dev)
+.dev/

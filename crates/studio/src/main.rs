@@ -69,8 +69,14 @@ async fn main() -> Result<()> {
         Some(json) => serde_json::from_str(&json).unwrap_or_default(),
         None => AppConfig::default(),
     };
-    // When launched by the desktop app, media-ai runs on a dynamically-chosen
-    // port passed via MEDIA_AI_BASE — let it override the stored/default base.
+    // When launched by the desktop app, the other sidecars run on dynamically
+    // chosen ports passed via VIENEU_BASE / MEDIA_AI_BASE — let those override the
+    // stored/default bases (the user no longer sets ports in Settings).
+    if let Ok(base) = std::env::var("VIENEU_BASE") {
+        if !base.is_empty() {
+            config.tts_base = base;
+        }
+    }
     if let Ok(base) = std::env::var("MEDIA_AI_BASE") {
         if !base.is_empty() {
             config.media_ai_base = base;

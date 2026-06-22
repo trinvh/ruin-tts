@@ -10,8 +10,16 @@ use std::sync::Mutex;
 
 use tauri::{Manager, RunEvent};
 
-const FFMPEG_NAME: &str = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
-const FFPROBE_NAME: &str = if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" };
+const FFMPEG_NAME: &str = if cfg!(windows) {
+    "ffmpeg.exe"
+} else {
+    "ffmpeg"
+};
+const FFPROBE_NAME: &str = if cfg!(windows) {
+    "ffprobe.exe"
+} else {
+    "ffprobe"
+};
 
 // Fallback ports if the OS can't hand out an ephemeral one (it always can).
 const TTS_FALLBACK: u16 = 8080;
@@ -41,6 +49,26 @@ fn pick_addr(fallback: u16) -> String {
     match std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()) {
         Ok(a) => format!("127.0.0.1:{}", a.port()),
         Err(_) => format!("127.0.0.1:{fallback}"),
+    }
+}
+
+/// Resolve where a sidecar lives. When `dev_env` is set (e.g. `make dev` runs the
+/// sidecars itself under `cargo watch` on fixed ports for Rust hot-reload), the
+/// shell connects to that URL and does NOT spawn the binary. Otherwise it picks a
+/// free port and returns the addr to spawn on.
+///
+/// Returns `(base_url, spawn_addr)`; `spawn_addr == None` means "don't spawn".
+fn resolve(dev_env: &str, fallback: u16) -> (String, Option<String>) {
+    match std::env::var(dev_env) {
+        Ok(base) if !base.trim().is_empty() => {
+            let base = base.trim().trim_end_matches('/').to_string();
+            eprintln!("[tauri] {dev_env} set → connecting to {base} (not spawning)");
+            (base, None)
+        }
+        _ => {
+            let addr = pick_addr(fallback);
+            (format!("http://{addr}"), Some(addr))
+        }
     }
 }
 
@@ -117,10 +145,18 @@ fn ffmpeg_status(app: tauri::AppHandle) -> serde_json::Value {
 /// Static-build base for this platform (ffmpeg.martin-riedl.de), or None.
 fn ffmpeg_base_url() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => Some("https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release"),
-        ("macos", "x86_64") => Some("https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release"),
-        ("windows", "x86_64") => Some("https://ffmpeg.martin-riedl.de/redirect/latest/windows/amd64/release"),
-        ("linux", "x86_64") => Some("https://ffmpeg.martin-riedl.de/redirect/latest/linux/amd64/release"),
+        ("macos", "aarch64") => {
+            Some("https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release")
+        }
+        ("macos", "x86_64") => {
+            Some("https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release")
+        }
+        ("windows", "x86_64") => {
+            Some("https://ffmpeg.martin-riedl.de/redirect/latest/windows/amd64/release")
+        }
+        ("linux", "x86_64") => {
+            Some("https://ffmpeg.martin-riedl.de/redirect/latest/linux/amd64/release")
+        }
         _ => None,
     }
 }
@@ -139,7 +175,9 @@ fn download_ffmpeg(app: tauri::AppHandle) -> Result<(), String> {
 
 /// Download a zip over HTTPS and extract its single binary entry to `dest`.
 fn fetch_zip_binary(url: &str, dest: &PathBuf) -> Result<(), String> {
-    let resp = ureq::get(url).call().map_err(|e| format!("tải {url}: {e}"))?;
+    let resp = ureq::get(url)
+        .call()
+        .map_err(|e| format!("tải {url}: {e}"))?;
     let mut buf = Vec::new();
     resp.into_reader()
         .read_to_end(&mut buf)
@@ -170,8 +208,10 @@ fn candidates(env_var: &str, name: &str) -> Vec<PathBuf> {
     let exe_adjacent = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(|d| d.join(&exe_name)));
-    let workspace_release =
-        PathBuf::from(format!("{}/../../target/release/{exe_name}", env!("CARGO_MANIFEST_DIR")));
+    let workspace_release = PathBuf::from(format!(
+        "{}/../../target/release/{exe_name}",
+        env!("CARGO_MANIFEST_DIR")
+    ));
     // `tauri dev` runs the app from ui/src-tauri/target/debug, which can hold a
     // STALE sidecar build — so a dev build prefers the freshly-built workspace
     // target/release. A bundled (release) app keeps the sidecars next to its exe
@@ -220,25 +260,28 @@ pub fn run() {
         ])
         .setup(|app| {
             let mut kids = Vec::new();
-            // Pick a free port per sidecar so launching never clashes with a
-            // stale/other instance on the fixed ports. The frontend learns the
-            // ports via server_base/studio_base/media_ai_base.
-            let tts_addr = pick_addr(TTS_FALLBACK);
-            let studio_addr = pick_addr(STUDIO_FALLBACK);
-            let media_addr = pick_addr(MEDIA_AI_FALLBACK);
+            // Resolve each sidecar. Normally the shell picks a free port and spawns
+            // the bundled binary. In `make dev` the sidecars run under `cargo watch`
+            // on fixed ports (Rust hot-reload) and pass DEV_*_BASE — then we connect
+            // instead of spawning. The frontend learns the URLs via the *_base cmds.
+            let (tts_base, tts_spawn) = resolve("DEV_VIENEU_BASE", TTS_FALLBACK);
+            let (studio_base, studio_spawn) = resolve("DEV_STUDIO_BASE", STUDIO_FALLBACK);
+            let (media_base, media_spawn) = resolve("DEV_MEDIA_AI_BASE", MEDIA_AI_FALLBACK);
             *app.state::<Bases>().0.lock().unwrap() = BaseUrls {
-                tts: format!("http://{tts_addr}"),
-                studio: format!("http://{studio_addr}"),
-                media: format!("http://{media_addr}"),
+                tts: tts_base.clone(),
+                studio: studio_base.clone(),
+                media: media_base.clone(),
             };
             // Point studio-server at the app-managed ffmpeg (used iff it exists —
             // see media::ffmpeg_bin); a download during onboarding makes it appear.
             let (ff, fp) = ffmpeg_paths(app.handle());
             std::env::set_var("FFMPEG_PATH", &ff);
             std::env::set_var("FFPROBE_PATH", &fp);
-            // studio-server talks to media-ai over this base (its config default
-            // is overridden by MEDIA_AI_BASE — see studio main).
-            std::env::set_var("MEDIA_AI_BASE", format!("http://{media_addr}"));
+            // studio-server reaches the other sidecars over these bases (its config
+            // defaults are overridden by VIENEU_BASE / MEDIA_AI_BASE — see studio
+            // main). Set them whether we spawn studio or it runs externally.
+            std::env::set_var("VIENEU_BASE", &tts_base);
+            std::env::set_var("MEDIA_AI_BASE", &media_base);
             // On Intel macOS, ort loads ONNX Runtime dynamically — point the
             // sidecars at the bundled dylib if present (no-op on arm64 / Windows
             // where ort is linked statically).
@@ -248,10 +291,16 @@ pub fn run() {
                     std::env::set_var("ORT_DYLIB_PATH", &dylib);
                 }
             }
-            if let Some(c) = spawn("VIENEU_SERVER_BIN", "vieneu-server", &["--addr", &tts_addr, "--workers", "2"]) {
-                kids.push(c);
-            } else {
-                eprintln!("[tauri] vieneu-server not found — start it manually on {tts_addr}");
+            if let Some(addr) = &tts_spawn {
+                if let Some(c) = spawn(
+                    "VIENEU_SERVER_BIN",
+                    "vieneu-server",
+                    &["--addr", addr, "--workers", "2"],
+                ) {
+                    kids.push(c);
+                } else {
+                    eprintln!("[tauri] vieneu-server not found — start it manually on {addr}");
+                }
             }
             // A bundled app's CWD is `/` (macOS) — give studio-server absolute
             // db + work paths under the OS app-data dir so it doesn't write junk.
@@ -263,17 +312,27 @@ pub fn run() {
             let db = data_dir.join("studio.db").to_string_lossy().into_owned();
             let work = data_dir.join("studio-work").to_string_lossy().into_owned();
             // studio-server inherits RUIN_API_KEY / VIENEU_BASE / YT_* / MEDIA_AI_BASE.
-            if let Some(c) = spawn("STUDIO_SERVER_BIN", "studio-server", &["--addr", &studio_addr, "--db", &db, "--work-dir", &work]) {
-                kids.push(c);
-            } else {
-                eprintln!("[tauri] studio-server not found — start it manually on {studio_addr}");
+            if let Some(addr) = &studio_spawn {
+                if let Some(c) = spawn(
+                    "STUDIO_SERVER_BIN",
+                    "studio-server",
+                    &["--addr", addr, "--db", &db, "--work-dir", &work],
+                ) {
+                    kids.push(c);
+                } else {
+                    eprintln!("[tauri] studio-server not found — start it manually on {addr}");
+                }
             }
             // media-ai (ASR + diarization + age/gender) — downloads its models on
             // first run. Optional age/gender model via MEDIA_AI_AGEGENDER_* env.
-            if let Some(c) = spawn("MEDIA_AI_BIN", "media-ai", &["--addr", &media_addr]) {
-                kids.push(c);
-            } else {
-                eprintln!("[tauri] media-ai not found — dubbing analysis unavailable on {media_addr}");
+            if let Some(addr) = &media_spawn {
+                if let Some(c) = spawn("MEDIA_AI_BIN", "media-ai", &["--addr", addr]) {
+                    kids.push(c);
+                } else {
+                    eprintln!(
+                        "[tauri] media-ai not found — dubbing analysis unavailable on {addr}"
+                    );
+                }
             }
             *app.state::<Children>().0.lock().unwrap() = kids;
             Ok(())
