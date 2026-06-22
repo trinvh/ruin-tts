@@ -5,6 +5,7 @@ import { HoverBox } from "../ui";
 import { fmt } from "./constants";
 import { OverlayLayer } from "./OverlayLayer";
 import { ClipPreview } from "./ClipPreview";
+import { SUB_FONT, SUB_OUTLINE, subBoxStyle, subFontSize } from "./subtitleStyle";
 import type { StudioActions, StudioState } from "./useStudio";
 import type { DubProjectHook } from "./useDubProject";
 import type { Transport } from "./useTransport";
@@ -89,7 +90,7 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
           onDragOver={(e) => { e.preventDefault(); setDropActive(true); }}
           onDragLeave={() => setDropActive(false)}
           onDrop={onDrop}
-          style={{ position: "relative", height: "100%", aspectRatio: aspectCss, maxWidth: "100%", borderRadius: 6, overflow: "hidden", background: "#000", boxShadow: dropActive ? `0 0 0 2px ${C.coral}` : "0 10px 40px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.05)" }}
+          style={{ position: "relative", height: "100%", aspectRatio: aspectCss, maxWidth: "100%", borderRadius: 6, overflow: "hidden", background: "#000", containerType: "size", boxShadow: dropActive ? `0 0 0 2px ${C.coral}` : "0 10px 40px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.05)" }}
         >
           <video
             ref={(el) => transport.attachVideo(el)}
@@ -112,11 +113,11 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
             </div>
           )}
           {videoOn && showCaption && (
-            <div style={{ position: "absolute", left: "6%", right: "6%", top: `${subStyle.pos}%`, textAlign: "center", pointerEvents: "none", transform: "translateY(-50%)" }}>
-              {showCapZh && <div style={{ fontSize: 13, color: C.ink4, marginBottom: 4, textShadow: "0 1px 3px rgba(0,0,0,.9)" }}>{capZh}</div>}
-              <div style={{ display: "inline-block", background: subStyle.bg ? "rgba(0,0,0,.55)" : "transparent", padding: "4px 12px", borderRadius: 7 }}>
-                <span style={{ fontWeight: 700, color: subStyle.color, textShadow: "0 1px 4px rgba(0,0,0,.85)", fontSize: Math.round(subStyle.size * 0.62) }}>{capVi || capZh}</span>
-              </div>
+            <div style={subBoxStyle()}>
+              {showCapZh && (
+                <div style={{ fontFamily: SUB_FONT, fontWeight: 600, color: "#fff", opacity: 0.9, textShadow: SUB_OUTLINE, fontSize: subFontSize(subStyle.size * 0.72), marginBottom: "calc(.4 * 1cqh)" }}>{capZh}</div>
+              )}
+              <span style={{ fontFamily: SUB_FONT, fontWeight: 600, color: subStyle.color, textShadow: SUB_OUTLINE, fontSize: subFontSize(subStyle.size), lineHeight: 1.3, background: subStyle.bg ? "rgba(0,0,0,.5)" : "transparent", padding: subStyle.bg ? "0 .35em" : undefined, WebkitBoxDecorationBreak: "clone", boxDecorationBreak: "clone" }}>{capVi || capZh}</span>
             </div>
           )}
           <OverlayLayer overlays={dub.overlays} time={t} stageRef={boxRef} onUpdate={(oid, geo) => void dub.patchOverlay(oid, geo)} onDelete={(oid) => void dub.removeOverlay(oid)} />

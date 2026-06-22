@@ -5,6 +5,15 @@
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
+/* Subtitle font — the SAME family the export burns via libass, so the preview
+   caption matches the rendered subtitle. Served from public/fonts. */
+@font-face {
+  font-family: "Be Vietnam Pro SemiBold";
+  src: url("/fonts/BeVietnamPro-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-display: swap;
+}
+
 /* Minimal control reset (full preflight is intentionally NOT loaded so App.css
    keeps its styling). Lives in @layer base so any unlayered App.css class rule
    still wins; only un-classed Tailwind-styled controls pick this up. */

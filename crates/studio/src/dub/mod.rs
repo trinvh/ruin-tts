@@ -12,6 +12,7 @@ pub mod clients;
 pub mod compose;
 pub mod overlap;
 pub mod pipeline;
+pub mod subtitle;
 
 use serde::{Deserialize, Serialize};
 

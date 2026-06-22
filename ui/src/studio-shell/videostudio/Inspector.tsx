@@ -176,7 +176,6 @@ export function Inspector({ state, actions, dub, transport, trackCtl }: Props) {
             {!subSegId && <div style={{ fontSize: 10.5, color: C.muted3, marginTop: -12, marginBottom: 16 }}>Phụ đề gốc chỉ để xem. Sửa bản dịch ở track “Phụ đề Việt”.</div>}
             <div style={{ ...SECTION, marginBottom: 11 }}>Kiểu chữ</div>
             <Slider label="Cỡ chữ" labelW={54} min={18} max={52} value={state.subStyle.size} onChange={(v) => actions.setSubNum("size", v)} onCommit={(v) => void dub.patchSettings({ sub_size: v })} display={`${state.subStyle.size}`} />
-            <Slider label="Vị trí" labelW={54} min={20} max={92} value={state.subStyle.pos} onChange={(v) => actions.setSubNum("pos", v)} display={`${state.subStyle.pos}`} />
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
               <span style={{ width: 54, flex: "none", fontSize: 12, color: C.steel }}>Màu</span>
               <div style={{ display: "flex", gap: 7 }}>

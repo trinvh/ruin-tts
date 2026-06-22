@@ -667,8 +667,21 @@ async fn export_composited(
     let mut ordered: Vec<&crate::dub::DubClip> = clips.iter().collect();
     ordered.sort_by_key(|c| c.track);
 
+    // Subtitles: burn the dub `text` lines with libass (word-wrapping + bundled
+    // Vietnamese font, matching the preview) when burning is on and the ffmpeg
+    // build has libass. Otherwise drawtext is the fallback; when subtitles are
+    // off, drop the text clips so nothing is drawn.
+    let project = services
+        .db
+        .get_dub_project(project_id)
+        .await?
+        .ok_or_else(|| anyhow!("không tìm thấy dự án"))?;
+    let use_ass = project.burn_subtitles && media::has_filter("subtitles").await;
+    let drop_text = use_ass || !project.burn_subtitles;
+
     let clip_args: Vec<media::ClipArg> = ordered
         .iter()
+        .filter(|c| !(drop_text && c.kind == "text"))
         .map(|c| media::ClipArg {
             kind: kind(&c.kind),
             source: c.source.as_deref().map(Path::new),
@@ -685,12 +698,59 @@ async fn export_composited(
         .collect();
 
     let out = dir.join("export.mp4");
-    // `drawtext` (text/subtitle clips) needs libfreetype; skip text when the
-    // ffmpeg build lacks the filter so the export still renders (video+audio+
-    // images) instead of failing outright.
+
+    // Write the ASS subtitle file + the bundled font next to the export.
+    let burn = if use_ass {
+        let segs = services.db.get_dub_segments(project_id).await?;
+        let events: Vec<crate::dub::subtitle::SubEvent> = segs
+            .iter()
+            .filter(|s| !s.text_vi.trim().is_empty())
+            .map(|s| crate::dub::subtitle::SubEvent {
+                start_s: s.placed_start(),
+                end_s: s.placed_end(),
+                vi: &s.text_vi,
+                src: Some(s.text_src.as_str()),
+            })
+            .collect();
+        let style = crate::dub::subtitle::SubStyle {
+            size: project.sub_size,
+            color: &project.sub_color,
+            bilingual: project.sub_bilingual,
+        };
+        let ass = crate::dub::subtitle::build_ass(&events, &style);
+        let ass_path = dir.join("subs.ass");
+        tokio::fs::write(&ass_path, ass)
+            .await
+            .context("ghi file phụ đề ASS")?;
+        let fonts_dir = dir.join("fonts");
+        ensure_dir(&fonts_dir).await?;
+        tokio::fs::write(
+            fonts_dir.join("BeVietnamPro-SemiBold.ttf"),
+            crate::dub::subtitle::FONT_TTF,
+        )
+        .await
+        .context("ghi font phụ đề")?;
+        let ass_abs = std::fs::canonicalize(&ass_path).unwrap_or(ass_path);
+        let fonts_abs = std::fs::canonicalize(&fonts_dir).unwrap_or(fonts_dir);
+        Some((ass_abs, fonts_abs))
+    } else {
+        None
+    };
+
+    // `drawtext` (the fallback text renderer) needs libfreetype; skip text when
+    // the ffmpeg build lacks it so the export still renders the rest.
     let text_ok = media::has_filter("drawtext").await;
+    let subtitle_burn = burn.as_ref().map(|(a, f)| media::SubtitleBurn {
+        ass: a,
+        fonts_dir: f,
+    });
     media::run_ffmpeg(&media::compose_export_args(
-        &clip_args, total_s, frame, &out, text_ok,
+        &clip_args,
+        total_s,
+        frame,
+        &out,
+        text_ok,
+        subtitle_burn,
     ))
     .await
     .context("dựng timeline (compositing)")?;
