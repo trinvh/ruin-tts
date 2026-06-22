@@ -146,37 +146,46 @@ function ResizeHandle({ onDown }: { onDown: (e: React.PointerEvent) => void }) {
   );
 }
 
-/** A user video layer: seeks to the right source frame; plays while in range. */
+/** A user video layer: seeks to the right source frame; plays while in range.
+ *  Only realigns on start/seek so smooth playback isn't yanked. */
 function VideoClip({ url, clip, time, playing }: { url: string; clip: DubClip; time: number; playing: boolean }) {
   const ref = useRef<HTMLVideoElement | null>(null);
-  const want = clip.in_s + (time - clip.start_s);
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
-    if (Math.abs(v.currentTime - want) > 0.25) v.currentTime = Math.max(0, want);
-    if (playing && v.paused) void v.play().catch(() => {});
-    if (!playing && !v.paused) v.pause();
-  }, [want, playing]);
+    const want = clip.in_s + (time - clip.start_s);
+    const needSeek = Math.abs(v.currentTime - want) > 0.3;
+    if (needSeek) v.currentTime = Math.max(0, want);
+    if (playing) {
+      if (v.paused && (!v.ended || needSeek)) void v.play().catch(() => {});
+    } else if (!v.paused) {
+      v.pause();
+    }
+  }, [time, playing, clip.in_s, clip.start_s]);
   return <video ref={ref} src={url} muted playsInline style={{ width: "100%", height: "auto", display: "block", pointerEvents: "none" }} />;
 }
 
-/** A user audio layer: kept in sync with the transport, played only in range. */
+/** A user audio layer: kept in sync with the transport, played only in range.
+ *  Only realigns on start/seek (no per-frame currentTime write → no stutter). */
 function AudioClip({ url, clip, time, playing }: { url?: string; clip: DubClip; time: number; playing: boolean }) {
   const ref = useRef<HTMLAudioElement | null>(null);
   const inRange = active(clip, time);
-  const want = clip.in_s + (time - clip.start_s);
+  useEffect(() => {
+    const a = ref.current;
+    if (a) a.volume = Math.max(0, Math.min(1, clip.volume));
+  }, [clip.volume]);
   useEffect(() => {
     const a = ref.current;
     if (!a) return;
-    a.volume = Math.max(0, Math.min(1, clip.volume));
-    if (inRange) {
-      if (Math.abs(a.currentTime - want) > 0.3) a.currentTime = Math.max(0, want);
-      if (playing && a.paused) void a.play().catch(() => {});
-      if (!playing && !a.paused) a.pause();
+    if (inRange && playing) {
+      const want = clip.in_s + (time - clip.start_s);
+      const needSeek = Math.abs(a.currentTime - want) > 0.3;
+      if (needSeek) a.currentTime = Math.max(0, want);
+      if (a.paused && (!a.ended || needSeek)) void a.play().catch(() => {});
     } else if (!a.paused) {
       a.pause();
     }
-  }, [want, playing, inRange, clip.volume]);
+  }, [inRange, playing, time, clip.in_s, clip.start_s]);
   if (!url) return null;
   return <audio ref={ref} src={url} preload="auto" />;
 }

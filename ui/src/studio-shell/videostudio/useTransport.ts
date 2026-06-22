@@ -55,27 +55,23 @@ export function useTransport(): Transport {
     setTimeState(t);
   };
 
-  // Slave the media elements to the clock at time `t`.
-  const drive = useCallback((t: number, play: boolean) => {
+  // Slave the <video> to the clock. `allowSeek` is true only for jumps (play
+  // start, seek); during smooth playback we DON'T touch currentTime — the video
+  // plays on its own real clock (which then drives the playhead in `tick`), so
+  // there's no per-frame yank that would stutter the picture or its audio.
+  const drive = useCallback((t: number, play: boolean, allowSeek: boolean) => {
     const v = video.current;
-    const a = vn.current;
     const { videoOffset, videoDur } = cfg.current;
-    if (v) {
-      const want = t - videoOffset;
-      const inRange = want >= -0.001 && (videoDur <= 0 || want <= videoDur);
-      if (inRange) {
-        if (Math.abs(v.currentTime - want) > 0.25) v.currentTime = Math.max(0, want);
-        if (play && v.paused) void v.play().catch(() => {});
-        if (!play && !v.paused) v.pause();
-      } else {
-        if (!v.paused) v.pause();
-        if (want < 0 && v.currentTime !== 0) v.currentTime = 0;
-      }
-    }
-    if (a) {
-      if (Math.abs(a.currentTime - t) > 0.25) a.currentTime = Math.max(0, t);
-      if (play && a.paused) void a.play().catch(() => {});
-      if (!play && !a.paused) a.pause();
+    if (!v) return;
+    const want = t - videoOffset;
+    const inRange = want >= -0.001 && (videoDur <= 0 || want <= videoDur + 0.05);
+    if (inRange) {
+      if (allowSeek && Math.abs(v.currentTime - want) > 0.2) v.currentTime = Math.max(0, want);
+      if (play && v.paused) void v.play().catch(() => {});
+      if (!play && !v.paused) v.pause();
+    } else {
+      if (!v.paused) v.pause();
+      if (allowSeek && want < 0 && v.currentTime !== 0) v.currentTime = 0;
     }
   }, []);
 
@@ -85,7 +81,7 @@ export function useTransport(): Transport {
     if (raf.current != null) cancelAnimationFrame(raf.current);
     raf.current = null;
     lastTs.current = null;
-    drive(timeRef.current, false);
+    drive(timeRef.current, false, true);
   }, [drive]);
 
   const tick = useCallback(
@@ -93,11 +89,19 @@ export function useTransport(): Transport {
       if (lastTs.current == null) lastTs.current = ts;
       const dt = (ts - lastTs.current) / 1000;
       lastTs.current = ts;
-      let t = timeRef.current + dt;
+      const v = video.current;
+      const { videoOffset, videoDur } = cfg.current;
+      // When the video is the active layer and actually playing, use ITS clock
+      // (a real media clock — smooth and drift-free); otherwise integrate (during
+      // the lead-in gap or past the video's end).
+      const prevWant = timeRef.current - videoOffset;
+      const videoActive =
+        !!v && !v.paused && prevWant >= -0.05 && (videoDur <= 0 || prevWant <= videoDur);
+      let t = videoActive && v ? v.currentTime + videoOffset : timeRef.current + dt;
       const dur = durRef.current;
       if (dur > 0 && t >= dur) {
         setTime(dur);
-        drive(dur, false);
+        drive(dur, false, true);
         playingRef.current = false;
         setPlaying(false);
         raf.current = null;
@@ -105,7 +109,7 @@ export function useTransport(): Transport {
         return;
       }
       setTime(t);
-      drive(t, true);
+      drive(t, true, false); // play/pause only — never yank currentTime mid-play
       raf.current = requestAnimationFrame(tick);
     },
     [drive],
@@ -118,7 +122,7 @@ export function useTransport(): Transport {
     playingRef.current = true;
     setPlaying(true);
     lastTs.current = null;
-    drive(timeRef.current, true);
+    drive(timeRef.current, true, true);
     raf.current = requestAnimationFrame(tick);
   }, [drive, tick]);
 
@@ -131,7 +135,7 @@ export function useTransport(): Transport {
     (t: number) => {
       const clamped = Math.max(0, t);
       setTime(clamped);
-      drive(clamped, playingRef.current);
+      drive(clamped, playingRef.current, true);
     },
     [drive],
   );

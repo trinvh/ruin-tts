@@ -64,19 +64,26 @@ function TtsClip({
 }) {
   const ref = useRef<HTMLAudioElement | null>(null);
   const inRange = time >= clip.start_s && time < clip.start_s + clip.dur_s;
-  const want = clip.in_s + (time - clip.start_s);
+  useEffect(() => {
+    const a = ref.current;
+    if (a) a.volume = Math.max(0, Math.min(1, volume));
+  }, [volume]);
   useEffect(() => {
     const a = ref.current;
     if (!a) return;
-    a.volume = Math.max(0, Math.min(1, volume));
-    if (inRange) {
-      if (Math.abs(a.currentTime - want) > 0.25) a.currentTime = Math.max(0, want);
-      if (playing && a.paused) void a.play().catch(() => {});
-      if (!playing && !a.paused) a.pause();
+    if (inRange && playing) {
+      const want = clip.in_s + (time - clip.start_s);
+      // Only (re)align on start / seek — never write currentTime mid-playback,
+      // which would re-buffer and cause stutter/dropouts.
+      const needSeek = Math.abs(a.currentTime - want) > 0.3;
+      if (needSeek) a.currentTime = Math.max(0, want);
+      // Don't restart a clip that already finished (audio shorter than the slot).
+      if (a.paused && (!a.ended || needSeek)) void a.play().catch(() => {});
     } else if (!a.paused) {
       a.pause();
     }
-  }, [want, playing, inRange, volume]);
+    // `time` is a dep so we react to seeks; the body no-ops during smooth play.
+  }, [inRange, playing, time, clip.in_s, clip.start_s]);
   if (!url) return null;
   return <audio ref={ref} src={url} preload="auto" />;
 }
