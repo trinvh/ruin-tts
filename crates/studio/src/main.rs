@@ -80,6 +80,11 @@ async fn main() -> Result<()> {
         tracing::warn!("Ruin API key not set — configure it in the app's Settings page");
     }
 
+    // Seed the bundled CC-BY voice pack (idempotent; non-fatal on failure).
+    if let Err(e) = studio::clones::seed::seed_builtin_voices(&db, &work_dir).await {
+        tracing::warn!("voicepack seed failed: {e:#}");
+    }
+
     let services = Arc::new(Services {
         db,
         config: tokio::sync::RwLock::new(config),

@@ -156,7 +156,17 @@ export async function putConfig(cfg: AppConfig): Promise<void> {
 }
 
 // ── Voice clones (persisted on disk by studio-server) ───────────────────────
-export type VoiceClone = { id: string; name: string; created_at: string };
+export type VoiceClone = {
+  id: string;
+  name: string;
+  created_at: string;
+  /** Bundled CC-BY voice-pack voice: cannot be renamed/deleted. */
+  builtin?: boolean;
+  /** Attribution (only present for built-in voice-pack voices). */
+  source?: string | null;
+  license?: string | null;
+  source_url?: string | null;
+};
 
 export async function listClones(): Promise<VoiceClone[]> {
   const r = await j<{ clones: VoiceClone[] }>(await fetch(`${await base()}/api/clones`));

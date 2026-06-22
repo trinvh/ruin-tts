@@ -646,6 +646,15 @@ export function StudioPage() {
       color: C.purpleLt,
       marginTop: 1,
     },
+    sourceBadge: {
+      fontSize: 10,
+      color: C.muted3,
+      marginTop: 1,
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      maxWidth: 150,
+    },
     cloneSection: {
       borderTop: `1px solid ${C.borderSoft}`,
       padding: "8px 10px 10px",
@@ -1191,7 +1200,19 @@ export function StudioPage() {
                     ) : (
                       <>
                         <div style={$.voiceNameText}>{cv.name}</div>
-                        <div style={$.cloneBadge}>đã nhân bản</div>
+                        {cv.builtin ? (
+                          <div
+                            style={$.sourceBadge}
+                            title={`Nguồn: ${cv.source ?? ""}${
+                              cv.license ? ` · ${cv.license}` : ""
+                            }`}
+                          >
+                            {cv.source}
+                            {cv.license ? ` · ${cv.license}` : ""}
+                          </div>
+                        ) : (
+                          <div style={$.cloneBadge}>đã nhân bản</div>
+                        )}
                       </>
                     )}
                   </div>
@@ -1208,31 +1229,35 @@ export function StudioPage() {
                       >
                         {isPreviewing ? "⟳" : "▶"}
                       </button>
-                      <button
-                        style={$.cloneDeleteBtn}
-                        title="Đổi tên giọng"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setRenameDraft(cv.name);
-                          setRenamingId(cv.id);
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.color = C.purpleLt; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.color = C.muted3; }}
-                      >
-                        ✎
-                      </button>
-                      <button
-                        style={$.cloneDeleteBtn}
-                        title="Xóa giọng nhân bản"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void deleteCloneRow(cv);
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.color = C.coral; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.color = C.muted3; }}
-                      >
-                        🗑
-                      </button>
+                      {!cv.builtin && (
+                        <>
+                          <button
+                            style={$.cloneDeleteBtn}
+                            title="Đổi tên giọng"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRenameDraft(cv.name);
+                              setRenamingId(cv.id);
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.color = C.purpleLt; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.color = C.muted3; }}
+                          >
+                            ✎
+                          </button>
+                          <button
+                            style={$.cloneDeleteBtn}
+                            title="Xóa giọng nhân bản"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void deleteCloneRow(cv);
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.color = C.coral; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.color = C.muted3; }}
+                          >
+                            🗑
+                          </button>
+                        </>
+                      )}
                     </>
                   )}
                 </div>

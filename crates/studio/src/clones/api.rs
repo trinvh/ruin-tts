@@ -35,13 +35,22 @@ fn clone_path(work_dir: &std::path::Path, id: &str) -> PathBuf {
 
 // ── handlers ──────────────────────────────────────────────────────────────────
 
+/// Public JSON for a clone — the on-disk path is omitted, attribution included.
+fn clone_json(c: &crate::db::VoiceClone) -> Value {
+    json!({
+        "id": c.id,
+        "name": c.name,
+        "created_at": c.created_at,
+        "builtin": c.builtin,
+        "source": c.source,
+        "license": c.license,
+        "source_url": c.source_url,
+    })
+}
+
 async fn list_clones(State(st): State<AppState>) -> Result<Json<Value>, AppError> {
     let clones = st.services.db.list_voice_clones().await?;
-    // Strip the file path from the response — clients don't need it.
-    let items: Vec<Value> = clones
-        .into_iter()
-        .map(|c| json!({ "id": c.id, "name": c.name, "created_at": c.created_at }))
-        .collect();
+    let items: Vec<Value> = clones.iter().map(clone_json).collect();
     Ok(Json(json!({ "clones": items })))
 }
 
@@ -119,9 +128,7 @@ async fn create_clone(
         .await?
         .expect("just inserted");
 
-    Ok(Json(
-        json!({ "id": clone.id, "name": clone.name, "created_at": clone.created_at }),
-    ))
+    Ok(Json(clone_json(&clone)))
 }
 
 #[derive(Deserialize)]
@@ -137,6 +144,14 @@ async fn rename_clone(
     if body.name.trim().is_empty() {
         return Err(AppError::bad_request("'name' must not be empty"));
     }
+    // Built-in voice-pack voices are immutable (attribution must stay intact).
+    if let Some(existing) = st.services.db.get_voice_clone(&id).await? {
+        if existing.builtin {
+            return Err(AppError::bad_request(
+                "không thể đổi tên giọng có sẵn trong bộ giọng",
+            ));
+        }
+    }
     let found = st.services.db.rename_voice_clone(&id, &body.name).await?;
     if !found {
         return Err(AppError::not_found("voice clone not found"));
@@ -147,15 +162,21 @@ async fn rename_clone(
         .get_voice_clone(&id)
         .await?
         .expect("just updated");
-    Ok(Json(
-        json!({ "id": clone.id, "name": clone.name, "created_at": clone.created_at }),
-    ))
+    Ok(Json(clone_json(&clone)))
 }
 
 async fn delete_clone(
     State(st): State<AppState>,
     AxPath(id): AxPath<String>,
 ) -> Result<Response, AppError> {
+    // Built-in voice-pack voices cannot be deleted.
+    if let Some(existing) = st.services.db.get_voice_clone(&id).await? {
+        if existing.builtin {
+            return Err(AppError::bad_request(
+                "không thể xoá giọng có sẵn trong bộ giọng",
+            ));
+        }
+    }
     match st.services.db.delete_voice_clone(&id).await? {
         None => Err(AppError::not_found("voice clone not found")),
         Some(file) => {

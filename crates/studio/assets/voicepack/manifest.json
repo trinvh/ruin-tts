@@ -1,0 +1,58 @@
+[
+  {
+    "id": "lsvsc-00",
+    "name": "Nữ · giọng Bắc · trung niên",
+    "source": "LSVSC (doof-ferb)",
+    "license": "CC BY 4.0",
+    "source_url": "https://huggingface.co/datasets/doof-ferb/LSVSC",
+    "dur": 6.9
+  },
+  {
+    "id": "lsvsc-01",
+    "name": "Nam · giọng Bắc · trung niên",
+    "source": "LSVSC (doof-ferb)",
+    "license": "CC BY 4.0",
+    "source_url": "https://huggingface.co/datasets/doof-ferb/LSVSC",
+    "dur": 7.8
+  },
+  {
+    "id": "lsvsc-02",
+    "name": "Nam · giọng Nam · thanh niên",
+    "source": "LSVSC (doof-ferb)",
+    "license": "CC BY 4.0",
+    "source_url": "https://huggingface.co/datasets/doof-ferb/LSVSC",
+    "dur": 7.7
+  },
+  {
+    "id": "lsvsc-03",
+    "name": "Nam · giọng Trung · trung niên",
+    "source": "LSVSC (doof-ferb)",
+    "license": "CC BY 4.0",
+    "source_url": "https://huggingface.co/datasets/doof-ferb/LSVSC",
+    "dur": 5.6
+  },
+  {
+    "id": "lsvsc-04",
+    "name": "Nữ · giọng Nam · thanh niên",
+    "source": "LSVSC (doof-ferb)",
+    "license": "CC BY 4.0",
+    "source_url": "https://huggingface.co/datasets/doof-ferb/LSVSC",
+    "dur": 5.1
+  },
+  {
+    "id": "vais1000-00",
+    "name": "Nữ · phòng thu (miền Nam)",
+    "source": "VAIS-1000 (VAIS · doof-ferb)",
+    "license": "CC BY 4.0",
+    "source_url": "https://huggingface.co/datasets/doof-ferb/vais1000",
+    "dur": 6.7
+  },
+  {
+    "id": "infore1-00",
+    "name": "Nữ · phòng thu (miền Bắc)",
+    "source": "InfoRe-1 (doof-ferb)",
+    "license": "CC BY 4.0",
+    "source_url": "https://huggingface.co/datasets/doof-ferb/infore1_25hours",
+    "dur": 5.3
+  }
+]

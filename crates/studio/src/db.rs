@@ -13,6 +13,26 @@ pub struct VoiceClone {
     pub created_at: String,
     /// Absolute path to the WAV file on disk.
     pub file: String,
+    /// Bundled voice-pack entry: cannot be renamed/deleted by the user.
+    pub builtin: bool,
+    /// Attribution (only set for built-in voice-pack voices).
+    pub source: Option<String>,
+    pub license: Option<String>,
+    pub source_url: Option<String>,
+}
+
+/// Map a `voice_clones` row (with the builtin/attribution columns) to a struct.
+fn row_to_voice_clone(r: sqlx::sqlite::SqliteRow) -> VoiceClone {
+    VoiceClone {
+        id: r.get("id"),
+        name: r.get("name"),
+        created_at: r.get("created_at"),
+        file: r.get("file"),
+        builtin: r.get::<i64, _>("builtin") != 0,
+        source: r.get("source"),
+        license: r.get("license"),
+        source_url: r.get("source_url"),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -773,34 +793,54 @@ impl Db {
         Ok(())
     }
 
+    /// Seed a bundled voice-pack voice. Idempotent: existing ids are left as-is
+    /// (so a user rename of a built-in — if we ever allow it — is preserved, and
+    /// re-seeding on every startup is a no-op).
+    pub async fn insert_builtin_voice_clone(
+        &self,
+        id: &str,
+        name: &str,
+        file: &str,
+        source: &str,
+        license: &str,
+        source_url: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO voice_clones \
+             (id, name, file, created_at, builtin, source, license, source_url) \
+             VALUES (?, ?, ?, datetime('now'), 1, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(file)
+        .bind(source)
+        .bind(license)
+        .bind(source_url)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn list_voice_clones(&self) -> Result<Vec<VoiceClone>> {
+        // Built-ins first, then user clones newest-first.
         let rows = sqlx::query(
-            "SELECT id, name, created_at, file FROM voice_clones ORDER BY created_at DESC",
+            "SELECT id, name, created_at, file, builtin, source, license, source_url \
+             FROM voice_clones ORDER BY builtin DESC, created_at DESC",
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .into_iter()
-            .map(|r| VoiceClone {
-                id: r.get("id"),
-                name: r.get("name"),
-                created_at: r.get("created_at"),
-                file: r.get("file"),
-            })
-            .collect())
+        Ok(rows.into_iter().map(row_to_voice_clone).collect())
     }
 
     pub async fn get_voice_clone(&self, id: &str) -> Result<Option<VoiceClone>> {
-        let row = sqlx::query("SELECT id, name, created_at, file FROM voice_clones WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.map(|r| VoiceClone {
-            id: r.get("id"),
-            name: r.get("name"),
-            created_at: r.get("created_at"),
-            file: r.get("file"),
-        }))
+        let row = sqlx::query(
+            "SELECT id, name, created_at, file, builtin, source, license, source_url \
+             FROM voice_clones WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(row_to_voice_clone))
     }
 
     pub async fn rename_voice_clone(&self, id: &str, name: &str) -> Result<bool> {
