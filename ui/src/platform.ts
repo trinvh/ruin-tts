@@ -87,7 +87,18 @@ export async function saveAsDialog(defaultPath: string): Promise<string | null> 
   if (!isTauri()) return null;
   try {
     const { save } = await import("@tauri-apps/plugin-dialog");
-    return (await save({ defaultPath })) ?? null;
+    return (await save({ defaultPath, filters: [{ name: "Video", extensions: ["mp4"] }] })) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The user's Desktop directory (for default save locations), or null on web. */
+export async function desktopDir(): Promise<string | null> {
+  if (!isTauri()) return null;
+  try {
+    const { desktopDir } = await import("@tauri-apps/api/path");
+    return await desktopDir();
   } catch {
     return null;
   }

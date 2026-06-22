@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { C, FONT, MONO } from "../theme";
 import { Icon } from "../icons";
 import { HoverBox } from "../ui";
 import { dubStatus } from "../tabs";
+import { copyFile, desktopDir, saveAsDialog } from "../../platform";
 import { ORDER, type DubProjectHook } from "./useDubProject";
 import type { EditorHistory } from "./useEditorHistory";
 
@@ -44,6 +46,21 @@ export function TopBar({ title, onTitle, onTitleCommit, snap, onToggleSnap, dub,
   const canAuto = !!dub.detail && !working && !synthDone;
   const exporting = status === "exporting";
   const canExport = !!dub.detail && !working;
+
+  const exportPath = dub.detail?.project.export_path ?? null;
+  const [saveMsg, setSaveMsg] = useState("");
+  const saveVideo = async () => {
+    if (!exportPath) return;
+    const safe = (dub.detail?.project.name || "video").replace(/[\\/:*?"<>|]/g, "_");
+    const desk = await desktopDir();
+    const dflt = desk ? `${desk.replace(/\/$/, "")}/${safe}.mp4` : `${safe}.mp4`;
+    const dest = await saveAsDialog(dflt);
+    if (!dest) return;
+    setSaveMsg("Đang lưu…");
+    const ok = await copyFile(exportPath, dest);
+    setSaveMsg(ok ? "Đã lưu ✓" : "Lưu thất bại");
+    setTimeout(() => setSaveMsg(""), 2500);
+  };
 
   return (
     <div style={{ height: 48, flex: "none", display: "flex", alignItems: "center", padding: "0 14px", gap: 12, background: C.panel, borderBottom: `1px solid ${C.border}` }}>
@@ -129,6 +146,18 @@ export function TopBar({ title, onTitle, onTitleCommit, snap, onToggleSnap, dub,
           <Icon name="export" size={16} stroke={1.9} />
           {exporting ? "Đang xuất…" : "Xuất video"}
         </HoverBox>
+        {exportPath && (
+          <HoverBox
+            as="button"
+            onClick={() => void saveVideo()}
+            title="Lưu video đã xuất ra máy (mặc định Desktop)"
+            style={{ height: 34, padding: "0 13px", border: `1px solid ${C.border}`, background: C.panel2, color: "#fff", borderRadius: 8, display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontFamily: FONT, fontSize: 13, fontWeight: 600 }}
+            hoverStyle={{ background: C.panel3 }}
+          >
+            <Icon name="export" size={15} stroke={1.8} />
+            {saveMsg || "Lưu video"}
+          </HoverBox>
+        )}
       </div>
     </div>
   );
