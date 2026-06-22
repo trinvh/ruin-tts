@@ -155,11 +155,12 @@ export function VideoStudio({ projectId, title: initialTitle }: Props) {
       const p = dub.detail?.project;
       if (!p) return null;
       const k = trackAudioKind(key);
-      return k === "original" ? p.original_volume : k === "vn" ? p.vn_volume : null;
+      // The video track carries the original audio → its volume.
+      return k === "original" || k === "video" ? p.original_volume : k === "vn" ? p.vn_volume : null;
     },
     setVolume: (key, v) => {
       const k = trackAudioKind(key);
-      if (k === "original") void dub.patchSettings({ original_volume: v });
+      if (k === "original" || k === "video") void dub.patchSettings({ original_volume: v });
       else if (k === "vn") void dub.patchSettings({ vn_volume: v });
     },
   };
@@ -181,7 +182,7 @@ export function VideoStudio({ projectId, title: initialTitle }: Props) {
   const addMedia = useCallback(async () => {
     const file = await pickMediaFile();
     if (!file) return;
-    const kind = file.type.startsWith("video") ? "video" : file.type.startsWith("audio") ? "audio" : "image";
+    const kind = mediaKind(file);
     const dur = await probeDuration(file, kind);
     const track = Math.max(0, ...dub.clips.map((c) => c.track)) + 1;
     await dub.addClip(
@@ -215,18 +216,35 @@ function pickMediaFile(): Promise<File | null> {
   });
 }
 
-/** Probe a media file's duration (seconds); images default to 5s. */
+/** Classify a media file — MIME first, then extension (WKWebView can report an
+ *  empty type, which would otherwise misfile an mp3 as an image). */
+function mediaKind(file: File): "video" | "audio" | "image" {
+  const t = (file.type || "").toLowerCase();
+  if (t.startsWith("video")) return "video";
+  if (t.startsWith("audio")) return "audio";
+  if (t.startsWith("image")) return "image";
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  if (["mp4", "mov", "webm", "mkv", "avi", "m4v"].includes(ext)) return "video";
+  if (["mp3", "wav", "m4a", "aac", "ogg", "flac", "opus"].includes(ext)) return "audio";
+  return "image";
+}
+
+/** Probe a media file's duration (seconds); images default to 5s; never hangs. */
 function probeDuration(file: File, kind: string): Promise<number> {
   if (kind === "image") return Promise.resolve(5);
   return new Promise((resolve) => {
     const el = document.createElement(kind === "video" ? "video" : "audio");
     el.preload = "metadata";
-    el.onloadedmetadata = () => {
-      const d = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : 5;
-      URL.revokeObjectURL(el.src);
-      resolve(d);
+    let done = false;
+    const finish = (d: number) => {
+      if (done) return;
+      done = true;
+      try { URL.revokeObjectURL(el.src); } catch { /* ignore */ }
+      resolve(d > 0 && Number.isFinite(d) ? d : 5);
     };
-    el.onerror = () => resolve(5);
+    el.onloadedmetadata = () => finish(el.duration);
+    el.onerror = () => finish(5);
+    setTimeout(() => finish(el.duration), 4000); // fallback if metadata never loads
     el.src = URL.createObjectURL(file);
   });
 }

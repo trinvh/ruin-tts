@@ -237,7 +237,9 @@ function TrackPanel({ trackKey, dub, transport, trackCtl }: { trackKey: string; 
   if (ak === "video") {
     return (
       <>
-        <div style={SECTION}>Track video</div>
+        <div style={SECTION}>Âm lượng tiếng gốc</div>
+        <TrackVolume kind="original" value0={trackCtl.volume(trackKey) ?? 0} transport={transport} onCommit={(v) => trackCtl.setVolume(trackKey, v)} />
+        <Divider />
         <RowToggle label="Bật track video" sub="Tắt = xuất chỉ âm thanh (không hình)" on={enabled} onClick={() => trackCtl.toggle(trackKey)} />
         <div style={{ fontSize: 10.5, color: C.muted3, marginTop: 12, lineHeight: 1.5 }}>Kéo clip video ra sau để chừa khoảng trống đầu video (lead-in); khi xuất sẽ có đoạn đen ở đầu.</div>
       </>

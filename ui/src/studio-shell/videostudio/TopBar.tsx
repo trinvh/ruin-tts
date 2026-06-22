@@ -120,8 +120,8 @@ export function TopBar({ title, onTitle, onTitleCommit, snap, onToggleSnap, dub,
         )}
         <HoverBox
           as="button"
-          onClick={() => canExport && void dub.runTo("done")}
-          title="Ghép track + xuất video tiếng Việt"
+          onClick={() => canExport && void dub.run("export")}
+          title="Ghép các track trên timeline thành video"
           style={{ height: 34, padding: "0 18px", border: "none", background: C.coral, color: "#fff", borderRadius: 8, display: "flex", alignItems: "center", gap: 8, cursor: canExport ? "pointer" : "default", opacity: canExport ? 1 : 0.55, fontFamily: FONT, fontSize: 13.5, fontWeight: 600, boxShadow: "0 4px 14px rgba(234,124,105,.4)" }}
           hoverStyle={canExport ? { background: C.coralLt } : undefined}
           activeStyle={canExport ? { transform: "scale(.97)" } : undefined}

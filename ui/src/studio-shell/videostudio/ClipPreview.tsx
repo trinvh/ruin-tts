@@ -83,6 +83,18 @@ export function ClipPreview({ clips, time, stageRef, playing, onUpdate }: Props)
     drag.current = { cid: c.id, mode, x: e.clientX, y: e.clientY, bw: box.width, bh: box.height, base: c };
   };
 
+  // Deselect when clicking anywhere outside a clip overlay (so the handles hide).
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t || !t.closest("[data-clip-ov]")) setSel(null);
+    };
+    window.addEventListener("pointerdown", onDown);
+    return () => window.removeEventListener("pointerdown", onDown);
+  }, []);
+  // Never show edit handles during playback.
+  const showSel = (id: string) => sel === id && !playing;
+
   return (
     <>
       {/* audio layers (no DOM position) */}
@@ -94,7 +106,7 @@ export function ClipPreview({ clips, time, stageRef, playing, onUpdate }: Props)
       {visual.map((c) => {
         if (!active(c, time)) return null;
         const g = { ...c, ...live[c.id] };
-        const selected = sel === c.id;
+        const selected = showSel(c.id);
         const frame: React.CSSProperties = {
           position: "absolute", left: `${g.x * 100}%`, top: `${g.y * 100}%`,
           width: `${g.w * 100}%`, opacity: c.opacity, touchAction: "none",
@@ -102,14 +114,14 @@ export function ClipPreview({ clips, time, stageRef, playing, onUpdate }: Props)
         };
         if (c.kind === "text") {
           return (
-            <div key={c.id} onPointerDown={start(c, "move")} style={{ ...frame, cursor: "move", textAlign: "center" }}>
+            <div key={c.id} data-clip-ov onPointerDown={start(c, "move")} style={{ ...frame, cursor: "move", textAlign: "center" }}>
               <span style={{ fontWeight: 700, color: "#fff", textShadow: "0 1px 4px rgba(0,0,0,.85)", fontSize: 22 }}>{c.text}</span>
               {selected && <ResizeHandle onDown={start(c, "resize")} />}
             </div>
           );
         }
         return (
-          <div key={c.id} onPointerDown={start(c, "move")} style={{ ...frame, cursor: "move" }}>
+          <div key={c.id} data-clip-ov onPointerDown={start(c, "move")} style={{ ...frame, cursor: "move" }}>
             {c.kind === "image" && urls[c.id] && (
               <img src={urls[c.id]} alt="" draggable={false} style={{ width: "100%", height: "auto", display: "block", pointerEvents: "none" }} />
             )}

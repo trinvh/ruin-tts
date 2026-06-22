@@ -100,15 +100,16 @@ export function TimelineEditor({ state, actions, transport, trackCtl, onClipTrim
             // Original/music audio follow the video and stay locked. The video
             // clip moves (= lead-in), and dub lines / subtitles / banners move.
             const locked = c.track === "A1" || c.track === "A2";
+            const isUser = /^(UV|UA|UI|UT)/.test(c.track);
             return {
               id: c.id,
               start: c.start,
               end: c.start + c.dur,
               effectId: c.type,
               movable: !locked,
-              // Only banners resize (their time range); dub lines keep their
-              // fixed duration and just shift.
-              flexible: c.type === "image" && c.id === sel,
+              // User clips + image overlays can be trimmed (resize); dub lines keep
+              // their fixed duration and just shift.
+              flexible: (isUser || c.type === "image") && c.id === sel,
             };
           }),
       })),
@@ -254,11 +255,10 @@ export function TimelineEditor({ state, actions, transport, trackCtl, onClipTrim
                 </div>
               );
             }}
-            onClickAction={(_e, { action }) => {
-              const clip = clipById.get(action.id);
-              if (!clip) return;
-              if (clip.type === "audio") actions.selectTrack(clip.track);
-              else actions.clipDown(clip.id, "move")(syntheticPointer());
+            onClickActionOnly={(_e, { action }) => {
+              // Select the individual clip (so each TTS/subtitle segment is
+              // viewable + editable); the gutter row selects the whole track.
+              if (clipById.has(action.id)) actions.clipDown(action.id, "move")(syntheticPointer());
             }}
             onClickRow={(_e, { row }) => actions.selectTrack(row.id)}
             onClickTimeArea={(time) => {

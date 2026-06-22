@@ -66,7 +66,9 @@ pub async fn compose_clips(services: &Services, project_id: &str) -> anyhow::Res
         .unwrap_or(0.0)
         .max(furthest_end);
 
-    // Track 0 — source video (carries the original audio via its volume).
+    // Track 0 — source video, carrying the original audio via its volume. Always
+    // present in the timeline (WYSIWYG: what's on the timeline is what exports);
+    // muting the original = volume 0.
     let mut video = clip(
         project_id,
         0,
@@ -79,36 +81,37 @@ pub async fn compose_clips(services: &Services, project_id: &str) -> anyhow::Res
     video.volume = project.original_volume;
     db.create_dub_clip(&video).await?;
 
+    // Always emit a TTS audio clip + a subtitle text clip per translated segment
+    // so every line is visible/selectable on the timeline. Muting the VN track =
+    // tts volume 0.
     for seg in &segments {
-        let has_text = !seg.text_vi.trim().is_empty();
-
-        // Track 1 — synthesized Vietnamese audio (only when a fitted clip exists).
-        if has_text {
-            if let Some(fitted) = seg.fitted_path.as_deref() {
-                let mut a = clip(
-                    project_id,
-                    1,
-                    "audio",
-                    format!("dub:tts:{}", seg.id),
-                    seg.placed_start(),
-                    seg.slot(),
-                );
-                a.source = Some(fitted.to_string());
-                db.create_dub_clip(&a).await?;
-            }
-
-            // Track 2 — subtitle text.
-            let mut t = clip(
+        if seg.text_vi.trim().is_empty() {
+            continue;
+        }
+        if let Some(fitted) = seg.fitted_path.as_deref() {
+            let mut a = clip(
                 project_id,
-                2,
-                "text",
-                format!("dub:sub:{}", seg.id),
+                1,
+                "audio",
+                format!("dub:tts:{}", seg.id),
                 seg.placed_start(),
                 seg.slot(),
             );
-            t.text = Some(seg.text_vi.clone());
-            db.create_dub_clip(&t).await?;
+            a.source = Some(fitted.to_string());
+            a.volume = project.vn_volume;
+            db.create_dub_clip(&a).await?;
         }
+
+        let mut t = clip(
+            project_id,
+            2,
+            "text",
+            format!("dub:sub:{}", seg.id),
+            seg.placed_start(),
+            seg.slot(),
+        );
+        t.text = Some(seg.text_vi.clone());
+        db.create_dub_clip(&t).await?;
     }
 
     // Track 3 — image banners.
