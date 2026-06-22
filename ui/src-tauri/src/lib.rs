@@ -117,14 +117,24 @@ fn ffmpeg_paths(app: &tauri::AppHandle) -> (PathBuf, PathBuf) {
     let d = ffmpeg_dir(app);
     (d.join(FFMPEG_NAME), d.join(FFPROBE_NAME))
 }
-fn ffmpeg_on_path() -> bool {
-    Command::new("ffmpeg")
-        .arg("-version")
-        .stdout(std::process::Stdio::null())
+/// Whether `ffmpeg` (the given binary) exists AND has the `drawtext` filter.
+/// drawtext (libfreetype) is required to burn subtitles/text; many system builds
+/// (e.g. a minimal homebrew ffmpeg) lack it, so a bare `-version` check isn't
+/// enough — we'd otherwise skip the download and silently fail to render text.
+fn ffmpeg_usable(bin: &str) -> bool {
+    match Command::new(bin)
+        .args(["-hide_banner", "-filters"])
         .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .output()
+    {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .any(|l| l.split_whitespace().nth(1) == Some("drawtext")),
+        _ => false,
+    }
+}
+fn ffmpeg_on_path() -> bool {
+    ffmpeg_usable("ffmpeg")
 }
 
 /// Is ffmpeg usable (downloaded into the app, or on PATH)? The onboarding UI uses

@@ -29,6 +29,16 @@ if [ -f services/media-ai/.env ]; then
   set -a; . services/media-ai/.env; set +a
 fi
 
+# Prefer the full static ffmpeg the app downloads during onboarding (it has
+# libfreetype/libass → drawtext + subtitle burn). The packaged shell passes this
+# to its sidecars, but in dev studio runs from this script, so wire it here.
+APP_BIN="$HOME/Library/Application Support/com.trinvh.beesoft/bin"
+if [ -x "$APP_BIN/ffmpeg" ]; then
+  export FFMPEG_PATH="$APP_BIN/ffmpeg"
+  [ -x "$APP_BIN/ffprobe" ] && export FFPROBE_PATH="$APP_BIN/ffprobe"
+  echo "→ using app-downloaded ffmpeg ($APP_BIN/ffmpeg)"
+fi
+
 # Kill any sidecars left from a previous run on the dev ports.
 pkill -f "vieneu-server --addr 127.0.0.1:${TTS_PORT}"  2>/dev/null || true
 pkill -f "studio-server --addr 127.0.0.1:${STUDIO_PORT}" 2>/dev/null || true
