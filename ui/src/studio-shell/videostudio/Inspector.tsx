@@ -212,6 +212,23 @@ function TrackPanel({ trackKey, dub, transport, trackCtl }: { trackKey: string; 
       </>
     );
   }
+  if (ak === "subSrc") {
+    return (
+      <>
+        <div style={SECTION}>Phụ đề gốc</div>
+        <RowToggle label="Hiện phụ đề gốc" sub="Hiện song ngữ ở preview & khi xuất" on={enabled} onClick={() => trackCtl.toggle(trackKey)} />
+      </>
+    );
+  }
+  if (ak === "video") {
+    return (
+      <>
+        <div style={SECTION}>Track video</div>
+        <RowToggle label="Bật track video" sub="Tắt = xuất chỉ âm thanh (không hình)" on={enabled} onClick={() => trackCtl.toggle(trackKey)} />
+        <div style={{ fontSize: 10.5, color: C.muted3, marginTop: 12, lineHeight: 1.5 }}>Khung hình gốc là mốc thời gian của timeline nên không di chuyển được.</div>
+      </>
+    );
+  }
   return <div style={{ fontSize: 13, color: C.muted3, lineHeight: 1.5 }}>Track này không có cấu hình âm lượng.</div>;
 }
 

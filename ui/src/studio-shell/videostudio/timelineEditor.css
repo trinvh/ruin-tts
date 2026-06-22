@@ -21,6 +21,13 @@
   font-family: "Barlow", "PingFang SC", "Noto Sans SC", sans-serif;
 }
 
+/* Never let a clip drag turn into a text selection. */
+.timeline-editor,
+.timeline-editor * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .timeline-editor-edit-area {
   background-color: #191722; /* C.laneBg */
 }

@@ -92,16 +92,21 @@ export function TimelineEditor({ state, actions, transport, trackCtl, onClipTrim
         id: k,
         actions: clips
           .filter((c) => c.track === k)
-          .map((c) => ({
-            id: c.id,
-            start: c.start,
-            end: c.start + c.dur,
-            effectId: c.type,
-            // Audio is controlled per-track, not per-segment — let the action
-            // move/resize for video/image/sub only.
-            movable: c.type !== "audio",
-            flexible: c.type !== "audio" && c.id === sel,
-          })),
+          .map((c) => {
+            // The source video + original/music audio are the time reference and
+            // stay locked. Dub lines (TTS), subtitles and banners move freely.
+            const locked = c.track === "V1" || c.track === "A1" || c.track === "A2";
+            return {
+              id: c.id,
+              start: c.start,
+              end: c.start + c.dur,
+              effectId: c.type,
+              movable: !locked,
+              // Only banners resize (their time range); dub lines keep their
+              // fixed duration and just shift.
+              flexible: c.type === "image" && c.id === sel,
+            };
+          }),
       })),
     [present, clips, sel],
   );
@@ -131,7 +136,7 @@ export function TimelineEditor({ state, actions, transport, trackCtl, onClipTrim
   const delOn = !!(selClip && selClip.id !== "vid");
 
   return (
-    <div style={{ height: "33vh", flex: "none", background: C.panel, borderTop: `1px solid ${C.border}`, display: "flex", flexDirection: "column", minHeight: 0 }}>
+    <div style={{ height: "33vh", flex: "none", background: C.panel, borderTop: `1px solid ${C.border}`, display: "flex", flexDirection: "column", minHeight: 0, userSelect: "none", WebkitUserSelect: "none" }}>
       {/* header */}
       <div style={{ flex: "none", height: 36, display: "flex", alignItems: "center", padding: "0 12px", gap: 10, borderBottom: `1px solid ${C.borderSoft}` }}>
         <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase", color: C.muted2 }}>Timeline</span>
