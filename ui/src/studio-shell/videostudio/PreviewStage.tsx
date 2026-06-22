@@ -40,21 +40,40 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
   };
   const { subStyle, aspect } = state;
   const t = transport.time;
-  const total = transport.duration || dub.duration;
-  const segs = dub.detail?.segments ?? [];
-  const cur = segs.find((s) => t >= s.start_s && t < s.end_s);
-  const capVi = cur?.text_vi?.trim() ?? "";
-  const capZh = cur?.text_src?.trim() ?? "";
+  const videoOffset = dub.detail?.project.video_offset_s ?? 0;
+  const videoDur = dub.duration;
+  // Active dub subtitle taken from the CLIPS (so timeline drags/positions show).
+  const subClip = (dub.clips ?? []).find(
+    (c) => c.origin?.startsWith("dub:sub") && t >= c.start_s && t < c.start_s + c.dur_s,
+  );
+  const capVi = subClip?.text?.trim() ?? "";
+  const capZh = (() => {
+    if (!subClip || !subStyle.bilingual) return "";
+    const segId = subClip.origin.slice("dub:sub:".length);
+    return dub.detail?.segments.find((s) => s.id === segId)?.text_src?.trim() ?? "";
+  })();
+  // Timeline length = furthest clip end (covers lead-in + added media).
+  const clipsEnd = (dub.clips ?? []).reduce((m, c) => Math.max(m, c.start_s + c.dur_s), 0);
+  const total = Math.max(clipsEnd, videoOffset + videoDur) || videoDur;
   // The Vietnamese subtitle track (eye = burn_subtitles) gates preview + export.
   const subsOn = dub.detail?.project.burn_subtitles ?? false;
-  const showCaption = subsOn && !!(capVi || capZh);
+  // Video track deleted → audio-only placeholder; otherwise frames show only
+  // while the playhead is within the (offset-delayed) video span.
+  const videoEnabled = dub.detail?.project.video_enabled ?? true;
+  const videoVisible =
+    videoEnabled && t >= videoOffset - 0.05 && (videoDur <= 0 || t <= videoOffset + videoDur + 0.05);
+  const showCaption = videoEnabled && subsOn && !!(capVi || capZh);
   const showCapZh = !!(subStyle.bilingual && capZh && capVi);
   const aspectCss = aspect === "9:16" ? "9 / 16" : aspect === "1:1" ? "1 / 1" : "16 / 9";
   const origVol = dub.detail?.project.original_volume ?? 1;
   const vnVol = dub.detail?.project.vn_volume ?? 1;
-  // Video track deleted → hide frames but keep the element mounted so its audio
-  // still plays; export produces an audio-only file to match.
-  const videoOn = dub.detail?.project.video_enabled ?? true;
+
+  // Feed the independent clock its lead-in + total length.
+  useEffect(() => {
+    transport.setVideoOffset(videoOffset);
+    transport.setDuration(total);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoOffset, total]);
 
   const onLoaded = () => {
     transport.onLoaded();
@@ -96,15 +115,10 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
             ref={(el) => transport.attachVideo(el)}
             src={dub.videoUrl || undefined}
             playsInline
-            style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", background: "#000", visibility: videoOn ? "visible" : "hidden" }}
+            style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", background: "#000", visibility: videoVisible ? "visible" : "hidden" }}
             onLoadedMetadata={onLoaded}
-            onPlay={transport.onPlay}
-            onPause={transport.onPause}
-            onTimeUpdate={transport.onTime}
-            onSeeking={transport.onTime}
-            onSeeked={transport.onTime}
           />
-          {!videoOn && (
+          {!videoEnabled && (
             <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "#000", color: C.muted2, pointerEvents: "none" }}>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                 <Icon name="wave" size={34} stroke={1.6} color={C.muted3} />
@@ -112,7 +126,7 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
               </div>
             </div>
           )}
-          {videoOn && showCaption && (
+          {showCaption && (
             <div style={subBoxStyle()}>
               {showCapZh && (
                 <div style={{ fontFamily: SUB_FONT, fontWeight: 600, color: "#fff", opacity: 0.9, textShadow: SUB_OUTLINE, fontSize: subFontSize(subStyle.size * 0.72), marginBottom: "calc(.4 * 1cqh)" }}>{capZh}</div>
