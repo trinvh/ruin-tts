@@ -4,6 +4,7 @@ import { Icon } from "../icons";
 import { HoverBox } from "../ui";
 import { fmt } from "./constants";
 import { OverlayLayer } from "./OverlayLayer";
+import { ClipPreview } from "./ClipPreview";
 import type { StudioActions, StudioState } from "./useStudio";
 import type { DubProjectHook } from "./useDubProject";
 import type { Transport } from "./useTransport";
@@ -119,6 +120,7 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
             </div>
           )}
           <OverlayLayer overlays={dub.overlays} time={t} stageRef={boxRef} onUpdate={(oid, geo) => void dub.patchOverlay(oid, geo)} onDelete={(oid) => void dub.removeOverlay(oid)} />
+          <ClipPreview clips={dub.clips} time={t} stageRef={boxRef} playing={transport.playing} onUpdate={(cid, geo) => void dub.patchClip(cid, geo)} />
           {dropActive && (
             <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "rgba(234,124,105,.18)", color: "#fff", pointerEvents: "none", fontSize: 13, fontWeight: 600 }}>
               Thả ảnh banner vào đây
