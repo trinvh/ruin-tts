@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { isTauri, pickDirectory } from "../platform";
+import { isTauri, openExternal, pickDirectory } from "../platform";
 import { useTtsSettings } from "../ttsSettings";
-import { getConfig, putConfig, type AppConfig } from "../studioApi";
+import {
+  getConfig,
+  listClones,
+  putConfig,
+  type AppConfig,
+  type VoiceClone,
+} from "../studioApi";
 import { C, FONT, MONO, injectStudioStyles } from "../studio-shell/theme";
 
 // ── Local-storage key for TTS format ────────────────────────────────────────
@@ -17,6 +23,7 @@ type SectionId =
   | "youtube"
   | "profile"
   | "security"
+  | "credits"
   | "about";
 
 type NavItem = { id: SectionId; label: string; icon: string };
@@ -43,6 +50,7 @@ const NAV: NavGroup[] = [
     group: "Ứng dụng",
     items: [
       { id: "security", label: "Bảo mật", icon: "🔒" },
+      { id: "credits", label: "Giọng & Bản quyền", icon: "📜" },
       { id: "about", label: "Giới thiệu", icon: "ℹ" },
     ],
   },
@@ -76,6 +84,10 @@ const SECTION_META: Record<SectionId, { title: string; desc: string }> = {
   security: {
     title: "Bảo mật",
     desc: "Khoá ứng dụng và quản lý dữ liệu nhạy cảm.",
+  },
+  credits: {
+    title: "Giọng & Bản quyền",
+    desc: "Nguồn và giấy phép của các giọng có sẵn trong ứng dụng.",
   },
   about: { title: "Giới thiệu", desc: "Phiên bản và thông tin ứng dụng." },
 };
@@ -705,6 +717,124 @@ function SectionSecurity({ cfg, set }: SectionSecurityProps) {
 
 // ── Section: About ────────────────────────────────────────────────────────────
 
+function SectionCredits() {
+  const [voices, setVoices] = useState<VoiceClone[] | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    listClones()
+      .then((cs) => {
+        if (alive) setVoices(cs.filter((c) => c.builtin));
+      })
+      .catch(() => alive && setError(true));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Group built-in voices by source so attribution is listed once per dataset.
+  const groups = new Map<string, { license: string; url: string; names: string[] }>();
+  for (const v of voices ?? []) {
+    const key = v.source ?? "Khác";
+    const g = groups.get(key) ?? {
+      license: v.license ?? "",
+      url: v.source_url ?? "",
+      names: [],
+    };
+    g.names.push(v.name);
+    groups.set(key, g);
+  }
+
+  return (
+    <div style={{ padding: "8px 0", maxWidth: 620 }}>
+      <p style={{ color: C.muted, fontSize: 12.5, lineHeight: 1.6, marginTop: 0 }}>
+        Các giọng “có sẵn” được nhân bản từ những mẫu giọng tiếng Việt phát hành
+        theo giấy phép{" "}
+        <button
+          type="button"
+          style={creditLinkStyle}
+          onClick={() => void openExternal("https://creativecommons.org/licenses/by/4.0/")}
+        >
+          CC BY 4.0
+        </button>
+        . Theo yêu cầu của giấy phép, dưới đây là ghi nhận nguồn.
+      </p>
+
+      {error && (
+        <div style={{ color: C.orange, fontSize: 12.5 }}>
+          Không tải được danh sách giọng. Hãy chắc chắn máy chủ đang chạy.
+        </div>
+      )}
+      {!error && voices === null && (
+        <div style={{ color: C.muted2, fontSize: 12.5 }}>Đang tải…</div>
+      )}
+      {voices !== null && voices.length === 0 && !error && (
+        <div style={{ color: C.muted2, fontSize: 12.5 }}>
+          Chưa có giọng có sẵn nào.
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 6 }}>
+        {[...groups.entries()].map(([source, g]) => (
+          <div
+            key={source}
+            style={{
+              background: C.inset,
+              border: `1px solid ${C.borderInset}`,
+              borderRadius: 10,
+              padding: "12px 14px",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ color: C.ink, fontSize: 13.5, fontWeight: 600 }}>{source}</span>
+              {g.license && (
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    padding: "1px 7px",
+                    borderRadius: 4,
+                    background: "rgba(146,136,224,0.15)",
+                    color: C.purpleLt,
+                    border: `1px solid rgba(146,136,224,0.3)`,
+                  }}
+                >
+                  {g.license}
+                </span>
+              )}
+            </div>
+            <div style={{ color: C.muted, fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+              {g.names.join(" · ")}
+            </div>
+            {g.url && (
+              <button
+                type="button"
+                style={{ ...creditLinkStyle, marginTop: 8, fontSize: 12, fontFamily: MONO }}
+                onClick={() => void openExternal(g.url)}
+              >
+                {g.url.replace(/^https?:\/\//, "")}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const creditLinkStyle: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  padding: 0,
+  margin: 0,
+  color: C.purpleLt,
+  fontSize: "inherit",
+  fontFamily: "inherit",
+  cursor: "pointer",
+  textDecoration: "underline",
+};
+
 function SectionAbout() {
   return (
     <div style={{ padding: "8px 0" }}>
@@ -1095,6 +1225,7 @@ export function SettingsPage() {
             {active === "youtube" && <SectionYoutube cfg={cfg} set={set} />}
             {active === "profile" && <SectionProfile cfg={cfg} set={set} />}
             {active === "security" && <SectionSecurity cfg={cfg} set={set} />}
+            {active === "credits" && <SectionCredits />}
             {active === "about" && <SectionAbout />}
           </div>
         </div>

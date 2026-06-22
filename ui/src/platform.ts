@@ -103,6 +103,20 @@ export async function revealInDir(path: string): Promise<void> {
   }
 }
 
+/** Open a URL in the user's default browser (WKWebView can't open new windows). */
+export async function openExternal(url: string): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(url);
+      return;
+    } catch {
+      /* fall through to web */
+    }
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 export function joinPath(dir: string, name: string): string {
   const sep = dir.includes("\\") ? "\\" : "/";
   return dir.endsWith(sep) ? dir + name : dir + sep + name;
