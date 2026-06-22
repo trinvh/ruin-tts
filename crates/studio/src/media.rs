@@ -355,6 +355,40 @@ pub fn mux_dub_args(video: &Path, voice: &Path, out: &Path, original_volume: f64
     ]
 }
 
+/// Audio-only export: mix the original audio (at `original_volume`) with the
+/// Vietnamese dub (at `vn_volume`) into a single AAC file — used when the video
+/// track is deleted in the editor ("chỉ có tiếng").
+pub fn export_audio_args(
+    video: &Path,
+    voice: &Path,
+    out: &Path,
+    original_volume: f64,
+    vn_volume: f64,
+) -> Vec<String> {
+    let fc = format!(
+        "[0:a]volume={ov:.3}[orig];[1:a]volume={vv:.3}[vn];[orig][vn]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]",
+        ov = original_volume.clamp(0.0, 1.0),
+        vv = vn_volume.clamp(0.0, 1.0),
+    );
+    vec![
+        "-y".into(),
+        "-i".into(),
+        s(video),
+        "-i".into(),
+        s(voice),
+        "-filter_complex".into(),
+        fc,
+        "-map".into(),
+        "[a]".into(),
+        "-vn".into(),
+        "-c:a".into(),
+        "aac".into(),
+        "-b:a".into(),
+        "192k".into(),
+        s(out),
+    ]
+}
+
 /// One subtitle cue: start/end seconds + text, plus an optional line rendered
 /// above it (used for bilingual source-over-Vietnamese subtitles).
 pub struct Cue<'a> {

@@ -3,6 +3,7 @@ import { Icon } from "../icons";
 import { HoverBox } from "../ui";
 import { dubStatus } from "../tabs";
 import { ORDER, type DubProjectHook } from "./useDubProject";
+import type { EditorHistory } from "./useEditorHistory";
 
 interface Props {
   title: string;
@@ -11,9 +12,25 @@ interface Props {
   snap: boolean;
   onToggleSnap: () => void;
   dub: DubProjectHook;
+  history: EditorHistory;
+  historyOpen: boolean;
+  onToggleHistory: () => void;
 }
 
-export function TopBar({ title, onTitle, onTitleCommit, snap, onToggleSnap, dub }: Props) {
+const histBtn = (active: boolean, enabled: boolean): React.CSSProperties => ({
+  width: 32,
+  height: 32,
+  border: `1px solid ${active ? "rgba(146,136,224,.5)" : C.border}`,
+  background: active ? "rgba(146,136,224,.16)" : "transparent",
+  color: active ? C.purpleLt : enabled ? C.steel : C.muted5,
+  borderRadius: 7,
+  display: "grid",
+  placeItems: "center",
+  cursor: enabled ? "pointer" : "default",
+  fontFamily: FONT,
+});
+
+export function TopBar({ title, onTitle, onTitleCommit, snap, onToggleSnap, dub, history, historyOpen, onToggleHistory }: Props) {
   const status = dub.detail?.project.status ?? "";
   const working = dub.busy || dub.autoRun;
   const st = dubStatus(status || "created");
@@ -69,6 +86,17 @@ export function TopBar({ title, onTitle, onTitleCommit, snap, onToggleSnap, dub 
             <path d="M4 7h4v3H4zM16 7h4v3h-4z" fill={C.panel} />
           </svg>
           Bám
+        </button>
+
+        <div style={{ width: 1, height: 20, background: C.border, margin: "0 4px" }} />
+        <button onClick={() => history.canUndo && history.undo()} disabled={!history.canUndo} title="Hoàn tác (⌘Z)" style={histBtn(false, history.canUndo)}>
+          <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 14L4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10h-1" /></svg>
+        </button>
+        <button onClick={() => history.canRedo && history.redo()} disabled={!history.canRedo} title="Làm lại (⇧⌘Z)" style={histBtn(false, history.canRedo)}>
+          <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M15 14l5-5-5-5" /><path d="M20 9H9a5 5 0 0 0 0 10h1" /></svg>
+        </button>
+        <button onClick={onToggleHistory} title="Lịch sử chỉnh sửa" style={histBtn(historyOpen, true)}>
+          <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v5h5" /><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" /><path d="M12 7v5l3 2" /></svg>
         </button>
       </div>
 

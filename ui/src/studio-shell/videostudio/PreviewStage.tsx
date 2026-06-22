@@ -35,6 +35,9 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
   const aspectCss = aspect === "9:16" ? "9 / 16" : aspect === "1:1" ? "1 / 1" : "16 / 9";
   const origVol = dub.detail?.project.original_volume ?? 1;
   const vnVol = dub.detail?.project.vn_volume ?? 1;
+  // Video track deleted → hide frames but keep the element mounted so its audio
+  // still plays; export produces an audio-only file to match.
+  const videoOn = dub.detail?.project.video_enabled ?? true;
 
   const onLoaded = () => {
     transport.onLoaded();
@@ -70,7 +73,7 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
             ref={(el) => transport.attachVideo(el)}
             src={dub.videoUrl || undefined}
             playsInline
-            style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", background: "#000" }}
+            style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", background: "#000", visibility: videoOn ? "visible" : "hidden" }}
             onLoadedMetadata={onLoaded}
             onPlay={transport.onPlay}
             onPause={transport.onPause}
@@ -78,7 +81,15 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
             onSeeking={transport.onTime}
             onSeeked={transport.onTime}
           />
-          {showCaption && (
+          {!videoOn && (
+            <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "#000", color: C.muted2, pointerEvents: "none" }}>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                <Icon name="wave" size={34} stroke={1.6} color={C.muted3} />
+                <span style={{ fontSize: 12.5 }}>Chỉ âm thanh (đã xoá track video)</span>
+              </div>
+            </div>
+          )}
+          {videoOn && showCaption && (
             <div style={{ position: "absolute", left: "6%", right: "6%", top: `${subStyle.pos}%`, textAlign: "center", pointerEvents: "none", transform: "translateY(-50%)" }}>
               {showCapZh && <div style={{ fontSize: 13, color: C.ink4, marginBottom: 4, textShadow: "0 1px 3px rgba(0,0,0,.9)" }}>{capZh}</div>}
               <div style={{ display: "inline-block", background: subStyle.bg ? "rgba(0,0,0,.55)" : "transparent", padding: "4px 12px", borderRadius: 7 }}>

@@ -49,6 +49,9 @@ pub struct DubProject {
     pub sub_color: String,
     /// Render the source text above the Vietnamese (two lines per cue).
     pub sub_bilingual: bool,
+    /// Video track enabled. When off, the editor previews audio-only and the
+    /// export produces an audio file instead of a muxed video.
+    pub video_enabled: bool,
     pub vn_track_path: Option<String>,
     pub export_path: Option<String>,
     pub created_at: String,

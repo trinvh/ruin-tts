@@ -470,12 +470,33 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
         .clone()
         .ok_or_else(|| anyhow!("chưa dựng track tiếng Việt"))?;
     let dir = project_dir(services, project_id);
+    let video = Path::new(&project.video_path);
+
+    // Video track deleted in the editor → export audio only (original + VN mix at
+    // their track volumes), no frames or subtitles.
+    if !project.video_enabled {
+        let out = dir.join("export.m4a");
+        media::run_ffmpeg(&media::export_audio_args(
+            video,
+            Path::new(&vn),
+            &out,
+            project.original_volume,
+            project.vn_volume,
+        ))
+        .await
+        .context("xuất âm thanh tiếng Việt")?;
+        services
+            .db
+            .set_dub_field(project_id, "export_path", &out.to_string_lossy())
+            .await?;
+        return Ok(());
+    }
+
     let out = dir.join("export.mp4");
 
     // Optionally write the Vietnamese subtitles. Burn them via libass when the
     // ffmpeg build supports it; otherwise embed a soft (selectable) track so
     // subtitles still ship even though they can't be hard-coded.
-    let video = Path::new(&project.video_path);
     let (sub_path, use_burn) = if project.burn_subtitles {
         let segs = services.db.get_dub_segments(project_id).await?;
         let cues: Vec<media::Cue> = segs

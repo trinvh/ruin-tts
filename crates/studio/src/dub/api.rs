@@ -158,6 +158,12 @@ struct UpdateSettings {
     sub_color: String,
     #[serde(default)]
     sub_bilingual: bool,
+    #[serde(default = "default_true")]
+    video_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_sub_y() -> f64 {
@@ -224,6 +230,7 @@ async fn update_settings(
             b.sub_size.clamp(8.0, 120.0),
             &sanitize_hex_color(&b.sub_color),
             b.sub_bilingual,
+            b.video_enabled,
         )
         .await?;
     let project = st.services.db.get_dub_project(&id).await?;

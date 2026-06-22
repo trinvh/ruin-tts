@@ -38,7 +38,7 @@ export type DubProject = {
   gemini_model: string; original_volume: number; vn_volume: number; speed_cap: number;
   burn_subtitles: boolean; blur_subtitle: boolean;
   blur_x: number; blur_y: number; blur_w: number; blur_h: number; sub_y: number;
-  sub_size: number; sub_color: string; sub_bilingual: boolean;
+  sub_size: number; sub_color: string; sub_bilingual: boolean; video_enabled: boolean;
   vn_track_path: string | null; export_path: string | null;
   created_at: string; updated_at: string;
 };
@@ -46,7 +46,7 @@ export type DubSettings = {
   name: string; gemini_model: string; original_volume: number; vn_volume: number; speed_cap: number;
   burn_subtitles: boolean; blur_subtitle: boolean;
   blur_x: number; blur_y: number; blur_w: number; blur_h: number; sub_y: number;
-  sub_size: number; sub_color: string; sub_bilingual: boolean;
+  sub_size: number; sub_color: string; sub_bilingual: boolean; video_enabled: boolean;
 };
 export type DubSegment = {
   id: string; project_id: string; idx: number; start_s: number; end_s: number;
