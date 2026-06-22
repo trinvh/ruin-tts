@@ -100,6 +100,7 @@ pub async fn analyze(services: &Services, project_id: &str) -> Result<()> {
             fitted_path: None,
             factor: None,
             status: "pending".into(),
+            offset_s: 0.0,
         })
         .collect();
     let mut speakers: Vec<DubSpeaker> = res
@@ -435,7 +436,7 @@ pub async fn build_track(services: &Services, project_id: &str) -> Result<()> {
         let dur = media::probe_duration(&p)
             .await
             .unwrap_or_else(|_| seg.slot());
-        let start = seg.start_s.max(0.0);
+        let start = seg.placed_start().max(0.0);
         total = total.max(start + dur);
         clips.push((p, start));
     }
@@ -503,8 +504,8 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
             .iter()
             .filter(|s| !s.text_vi.trim().is_empty())
             .map(|s| media::Cue {
-                start: s.start_s,
-                end: s.end_s,
+                start: s.placed_start(),
+                end: s.placed_end(),
                 text: &s.text_vi,
                 top: if project.sub_bilingual {
                     Some(s.text_src.as_str())
@@ -690,6 +691,7 @@ mod tests {
             fitted_path: None,
             factor: None,
             status: "pending".into(),
+            offset_s: 0.0,
         }
     }
 

@@ -1,0 +1,118 @@
+/*
+ * Dark-theme overrides for @xzdarcy/react-timeline-editor.
+ *
+ * The library ships a light/blue-accented stylesheet at
+ *   @xzdarcy/react-timeline-editor/dist/react-timeline-editor.css
+ * (its own greys + #5297FF blue cursor). This file recolours every public
+ * `.timeline-editor-*` class to the Beesoft Studio palette (theme.ts `C`, hex
+ * values inlined here because CSS cannot import the TS object) so the timeline
+ * matches Timeline.tsx (laneBg #191722, ruler #211f2d, coral #EA7C69 playhead).
+ *
+ * IMPORTANT: import order matters. Import the library stylesheet FIRST, then
+ * this file, so these overrides win:
+ *   import "@xzdarcy/react-timeline-editor/dist/react-timeline-editor.css";
+ *   import "./timelineEditor.css";
+ */
+
+/* Editor shell ----------------------------------------------------------- */
+.timeline-editor {
+  background-color: #191722; /* C.laneBg */
+  color: #c7cbd8;            /* C.ink3 */
+  font-family: "Barlow", "PingFang SC", "Noto Sans SC", sans-serif;
+}
+
+.timeline-editor-edit-area {
+  background-color: #191722; /* C.laneBg */
+}
+
+/* Rows ------------------------------------------------------------------- */
+/* The library paints each row with a base fill + a 1px vertical grid line.
+   Recolour both: dark lane bg + subtle grid line. */
+.timeline-editor-edit-row {
+  background-image:
+    linear-gradient(#191722, #191722),                            /* C.laneBg */
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 0);
+  border-bottom: 1px solid #2a2c38; /* C.borderSoft — subtle row separator */
+}
+
+.timeline-editor-edit-row-drag-handle {
+  color: #5a5e70; /* C.muted5 */
+}
+.timeline-editor-edit-row-drag-handle:hover {
+  color: #8b8f9e; /* C.muted */
+}
+
+/* Drag/insert affordances → coral instead of the library blue. */
+.timeline-editor-edit-row-placeholder {
+  background: rgba(234, 124, 105, 0.1); /* C.coral @ 10% */
+  border: 2px dashed #ea7c69;           /* C.coral */
+}
+.timeline-editor-edit-row:before {
+  background: #ea7c69; /* C.coral insert indicator */
+}
+
+/* Actions (clips) -------------------------------------------------------- */
+/* The component sets each clip's own background via inline style, so keep the
+   default action background subtle/transparent and only style borders+handles. */
+.timeline-editor-action {
+  background-color: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+}
+
+/* Resize handle hit-areas (the chevron carets) → coral. */
+.timeline-editor-action .timeline-editor-action-left-stretch:after {
+  border-left-color: #ea7c69;          /* C.coral */
+  border-right-color: transparent;
+}
+.timeline-editor-action .timeline-editor-action-right-stretch:after {
+  border-right-color: #ea7c69;         /* C.coral */
+  border-left-color: transparent;
+}
+
+/* Cursor / playhead → coral --------------------------------------------- */
+.timeline-editor-cursor {
+  border-left-color: #ea7c69 !important;  /* C.coral */
+  border-right-color: #ea7c69 !important;
+}
+.timeline-editor-cursor-top {
+  border-top-color: #ea7c69; /* C.coral (top marker, if rendered as triangle) */
+  color: #ea7c69;
+}
+.timeline-editor-drag-line {
+  border-left-color: rgba(234, 124, 105, 0.6); /* C.coral @ 60% */
+}
+
+/* Time area / ruler ------------------------------------------------------ */
+.timeline-editor-time-area {
+  background-color: #211f2d; /* C.ruler */
+}
+.timeline-editor-time-unit {
+  border-right-color: #34384a; /* C.tick */
+}
+.timeline-editor-time-unit-scale {
+  color: #8b8f9e; /* C.muted — light-grey tick labels */
+  font-family: "IBM Plex Mono", monospace;
+}
+
+/* Scrollbars → thin + dark ---------------------------------------------- */
+.timeline-editor-edit-area .ReactVirtualized__Grid::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.timeline-editor-edit-area .ReactVirtualized__Grid::-webkit-scrollbar-track {
+  background-color: transparent !important;
+}
+.timeline-editor-edit-area .ReactVirtualized__Grid::-webkit-scrollbar-thumb {
+  background: #393c49; /* C.border */
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.timeline-editor-edit-area .ReactVirtualized__Grid::-webkit-scrollbar-thumb:hover {
+  background: #4a4e5e;
+  background-clip: padding-box;
+}
+.timeline-editor:hover .timeline-editor-edit-area .ReactVirtualized__Grid::-webkit-scrollbar {
+  height: 8px;
+}

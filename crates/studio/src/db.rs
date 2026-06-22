@@ -922,6 +922,17 @@ impl Db {
         Ok(())
     }
 
+    /// Shift a segment on the timeline by `offset_s` seconds (free-move). The
+    /// clip duration is unchanged; only its placement and subtitle timing move.
+    pub async fn set_dub_segment_offset(&self, seg_id: &str, offset_s: f64) -> Result<()> {
+        sqlx::query("UPDATE dub_segments SET offset_s = ? WHERE id = ?")
+            .bind(offset_s)
+            .bind(seg_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     // ── Voice clones ──────────────────────────────────────────────────────────
     pub async fn insert_voice_clone(&self, id: &str, name: &str, file: &str) -> Result<()> {
         sqlx::query(
@@ -1098,6 +1109,7 @@ fn dub_segment_from_row(r: sqlx::sqlite::SqliteRow) -> crate::dub::DubSegment {
         fitted_path: r.get("fitted_path"),
         factor: r.get("factor"),
         status: r.get("status"),
+        offset_s: r.get("offset_s"),
     }
 }
 
@@ -1162,6 +1174,7 @@ mod tests {
             fitted_path: None,
             factor: None,
             status: "pending".into(),
+            offset_s: 0.0,
         }];
         db.replace_dub_segments("p1", &segs).await.unwrap();
         let speakers = vec![crate::dub::DubSpeaker {

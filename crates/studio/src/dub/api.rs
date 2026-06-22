@@ -40,6 +40,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/dub/projects/{id}/export", post(step_export))
         .route("/api/dub/projects/{id}/cancel", post(cancel))
         .route("/api/dub/segments/{id}", put(update_segment))
+        .route("/api/dub/segments/{id}/offset", put(set_segment_offset))
         .route(
             "/api/dub/projects/{id}/speakers/{speaker}/voice",
             put(set_speaker_voice),
@@ -445,6 +446,23 @@ async fn update_segment(
 }
 
 #[derive(Deserialize)]
+struct SetOffset {
+    offset_s: f64,
+}
+
+async fn set_segment_offset(
+    State(st): State<AppState>,
+    AxPath(id): AxPath<String>,
+    Json(b): Json<SetOffset>,
+) -> Result<Json<Value>, AppError> {
+    st.services
+        .db
+        .set_dub_segment_offset(&id, b.offset_s)
+        .await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
 struct SetVoice {
     #[serde(default)]
     voice: Option<String>,
@@ -533,7 +551,7 @@ async fn create_overlay(
     // Geometry (fractions); defaults give a visible top-left banner over the whole clip.
     let (mut start_s, mut end_s, mut x, mut y, mut w, mut opacity) =
         (0.0, 0.0, 0.05, 0.05, 0.3, 1.0);
-    let mut field_f64 = |name: &str, raw: String, slot: &mut f64| {
+    let field_f64 = |name: &str, raw: String, slot: &mut f64| {
         if let Ok(v) = raw.trim().parse::<f64>() {
             let _ = name;
             *slot = v;

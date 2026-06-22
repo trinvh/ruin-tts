@@ -52,6 +52,7 @@ export type DubSegment = {
   id: string; project_id: string; idx: number; start_s: number; end_s: number;
   speaker: string; text_src: string; text_vi: string; voice: string | null;
   tts_path: string | null; fitted_path: string | null; factor: number | null; status: string;
+  offset_s: number;
 };
 export type DubSpeaker = { speaker: string; gender: string | null; age: number | null; voice: string | null };
 export type DubOverlay = {
@@ -158,6 +159,12 @@ export async function updateDubSegment(segId: string, text_vi: string, voice: st
 export async function setDubSpeakerVoice(id: string, speaker: string, voice: string | null): Promise<void> {
   const r = await fetch(`${await base()}/api/dub/projects/${id}/speakers/${encodeURIComponent(speaker)}/voice`, {
     method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ voice }),
+  });
+  if (!r.ok) throw new Error(`${r.status}: ${await r.text().catch(() => "")}`);
+}
+export async function setDubSegmentOffset(id: string, offset_s: number): Promise<void> {
+  const r = await fetch(`${await base()}/api/dub/segments/${id}/offset`, {
+    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ offset_s }),
   });
   if (!r.ok) throw new Error(`${r.status}: ${await r.text().catch(() => "")}`);
 }

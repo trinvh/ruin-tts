@@ -10,7 +10,9 @@ import { TopBar } from "./TopBar";
 import { LeftPanel } from "./LeftPanel";
 import { PreviewStage } from "./PreviewStage";
 import { Inspector } from "./Inspector";
-import { Timeline } from "./Timeline";
+import "@xzdarcy/react-timeline-editor/dist/react-timeline-editor.css";
+import "./timelineEditor.css";
+import { TimelineEditor } from "./TimelineEditor";
 import { HistoryPanel } from "./HistoryPanel";
 
 interface Props {
@@ -30,11 +32,20 @@ export function VideoStudio({ projectId, title: initialTitle }: Props) {
   // Trimming/moving an overlay clip on the timeline persists its time range.
   const onTrimCommit = useCallback(
     (clipId: string, start: number, dur: number) => {
-      if (!clipId.startsWith("ovl_")) return;
-      const oid = clipId.slice(4);
-      const o = dub.overlays.find((v) => v.id === oid);
-      if (!o) return;
-      void dub.patchOverlay(oid, { start_s: start, end_s: start + dur, x: o.x, y: o.y, w: o.w, opacity: o.opacity });
+      // Banner overlay: drag/trim sets its time range.
+      if (clipId.startsWith("ovl_")) {
+        const oid = clipId.slice(4);
+        const o = dub.overlays.find((v) => v.id === oid);
+        if (o) void dub.patchOverlay(oid, { start_s: start, end_s: start + dur, x: o.x, y: o.y, w: o.w, opacity: o.opacity });
+        return;
+      }
+      // Dub line (subtitle / TTS clip): moving it shifts the segment by an offset
+      // (duration is fixed, so only the new start matters).
+      const m = /^(?:svi|szh|tts)_(.+)$/.exec(clipId);
+      if (m) {
+        const seg = dub.detail?.segments.find((s) => s.id === m[1]);
+        if (seg) void dub.setSegmentOffset(seg.id, start - seg.start_s);
+      }
     },
     [dub],
   );
@@ -150,7 +161,7 @@ export function VideoStudio({ projectId, title: initialTitle }: Props) {
         <Inspector state={state} actions={actions} dub={dub} transport={transport} trackCtl={trackCtl} />
         {historyOpen && <HistoryPanel history={history} onClose={() => setHistoryOpen(false)} />}
       </div>
-      <Timeline state={state} actions={actions} transport={transport} trackCtl={trackCtl} />
+      <TimelineEditor state={state} actions={actions} transport={transport} trackCtl={trackCtl} onClipTrim={onTrimCommit} />
     </div>
   );
 }

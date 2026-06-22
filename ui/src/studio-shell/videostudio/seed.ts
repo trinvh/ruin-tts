@@ -25,14 +25,16 @@ export function buildClips(detail: DubDetail | null, duration: number): Clip[] {
   ];
 
   const segDur = (s: { start_s: number; end_s: number }) => Math.max(0.2, s.end_s - s.start_s);
+  // Free-move: a dub line sits at start_s + offset_s on the timeline.
+  const placed = (s: { start_s: number; offset_s?: number }) => Math.max(0, s.start_s + (s.offset_s ?? 0));
   if (hasSrc) {
-    for (const s of segs) clips.push({ id: "szh_" + s.id, track: "SZH", type: "sub", lang: "zh", name: s.text_src || "(…)", text: s.text_src, srcVideo: "vid", start: s.start_s, dur: segDur(s) });
+    for (const s of segs) clips.push({ id: "szh_" + s.id, track: "SZH", type: "sub", lang: "zh", name: s.text_src || "(…)", text: s.text_src, srcVideo: "vid", start: placed(s), dur: segDur(s) });
   }
   if (hasVi) {
-    for (const s of segs) clips.push({ id: "svi_" + s.id, track: "SVI", type: "sub", lang: "vi", name: s.text_vi || "(chưa dịch)", text: s.text_vi, srcVideo: "vid", start: s.start_s, dur: segDur(s) });
+    for (const s of segs) clips.push({ id: "svi_" + s.id, track: "SVI", type: "sub", lang: "vi", name: s.text_vi || "(chưa dịch)", text: s.text_vi, srcVideo: "vid", start: placed(s), dur: segDur(s) });
   }
   if (hasTts) {
-    for (const s of segs) clips.push({ id: "tts_" + s.id, track: "TTS", type: "audio", kind: "tts", name: s.text_vi || "TTS", srcVideo: "vid", start: s.start_s, dur: segDur(s), vol: 100, speed: 100, fadeIn: 0, fadeOut: 0 });
+    for (const s of segs) clips.push({ id: "tts_" + s.id, track: "TTS", type: "audio", kind: "tts", name: s.text_vi || "TTS", srcVideo: "vid", start: placed(s), dur: segDur(s), vol: 100, speed: 100, fadeIn: 0, fadeOut: 0 });
   }
   // Image/banner overlays on the IMG track — dragging/trimming the clip edits the
   // overlay's time range (see VideoStudio onTrimCommit).
@@ -49,7 +51,7 @@ export function clipSignature(detail: DubDetail | null, duration: number): strin
   if (!detail) return `none:${duration}`;
   const p = detail.project;
   const ov = detail.overlays.map((o) => `${o.id}@${o.start_s.toFixed(1)}-${o.end_s.toFixed(1)}`).join(",");
-  return `${p.status}:${Math.round(duration)}:${p.original_volume}:${detail.segments.map((s) => s.id + "=" + s.text_vi.length + "/" + s.text_src.length).join(",")}:${ov}`;
+  return `${p.status}:${Math.round(duration)}:${p.original_volume}:${detail.segments.map((s) => s.id + "=" + s.text_vi.length + "/" + s.text_src.length + "@" + (s.offset_s ?? 0).toFixed(2)).join(",")}:${ov}`;
 }
 
 /** Map a seeded subtitle clip id back to its segment id (or null). */

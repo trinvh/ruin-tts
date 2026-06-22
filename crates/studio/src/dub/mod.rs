@@ -74,11 +74,25 @@ pub struct DubSegment {
     pub fitted_path: Option<String>,
     pub factor: Option<f64>,
     pub status: String,
+    /// Seconds to shift this line on the timeline (free-move). The clip plays at
+    /// `start_s + offset_s` and its subtitle shifts by the same amount; duration
+    /// is unchanged. Default 0.
+    pub offset_s: f64,
 }
 
 impl DubSegment {
     pub fn slot(&self) -> f64 {
         (self.end_s - self.start_s).max(0.0)
+    }
+
+    /// Timeline start once the operator's offset is applied.
+    pub fn placed_start(&self) -> f64 {
+        self.start_s + self.offset_s
+    }
+
+    /// Timeline end once the operator's offset is applied.
+    pub fn placed_end(&self) -> f64 {
+        self.end_s + self.offset_s
     }
 }
 
