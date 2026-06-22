@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::{
     body::Bytes,
-    extract::{Path as AxPath, State},
+    extract::{Multipart, Path as AxPath, State},
     http::header,
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -44,6 +44,12 @@ pub fn routes() -> Router<AppState> {
             "/api/dub/projects/{id}/speakers/{speaker}/voice",
             put(set_speaker_voice),
         )
+        .route("/api/dub/projects/{id}/overlays", post(create_overlay))
+        .route(
+            "/api/dub/overlays/{oid}",
+            put(update_overlay).delete(delete_overlay),
+        )
+        .route("/api/dub/overlays/{oid}/image", get(serve_overlay_image))
 }
 
 /// Running-map key for a dubbing task (namespaced so it can't collide with run ids).
@@ -112,10 +118,12 @@ async fn get_project(
         .ok_or_else(|| AppError::not_found("không tìm thấy dự án"))?;
     let segments = st.services.db.get_dub_segments(&id).await?;
     let speakers = st.services.db.get_dub_speakers(&id).await?;
+    let overlays = st.services.db.list_dub_overlays(&id).await?;
     Ok(Json(json!({
         "project": project,
         "segments": segments,
         "speakers": speakers,
+        "overlays": overlays,
     })))
 }
 
@@ -491,5 +499,173 @@ async fn serve_video(
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|_| AppError::not_found("không đọc được file video"))?;
+    Ok(([(header::CONTENT_TYPE, ct)], Bytes::from(bytes)).into_response())
+}
+
+// ── Image/banner overlays ───────────────────────────────────────────────────────
+fn img_content_type(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Upload an image overlay (multipart: `file` + optional geometry fields). The
+/// image is stored under `<work_dir>/dub/<project>/overlays/<id>.<ext>`.
+async fn create_overlay(
+    State(st): State<AppState>,
+    AxPath(id): AxPath<String>,
+    mut mp: Multipart,
+) -> Result<Json<Value>, AppError> {
+    if st.services.db.get_dub_project(&id).await?.is_none() {
+        return Err(AppError::not_found("không tìm thấy dự án"));
+    }
+    let mut bytes: Option<Bytes> = None;
+    let mut ext = "png".to_string();
+    // Geometry (fractions); defaults give a visible top-left banner over the whole clip.
+    let (mut start_s, mut end_s, mut x, mut y, mut w, mut opacity) =
+        (0.0, 0.0, 0.05, 0.05, 0.3, 1.0);
+    let mut field_f64 = |name: &str, raw: String, slot: &mut f64| {
+        if let Ok(v) = raw.trim().parse::<f64>() {
+            let _ = name;
+            *slot = v;
+        }
+    };
+    while let Some(field) = mp
+        .next_field()
+        .await
+        .map_err(|e| AppError::bad_request(format!("multipart lỗi: {e}")))?
+    {
+        match field.name().map(|s| s.to_string()).as_deref() {
+            Some("file") => {
+                if let Some(fname) = field.file_name() {
+                    if let Some(e) = Path::new(fname).extension().and_then(|e| e.to_str()) {
+                        ext = e.to_ascii_lowercase();
+                    }
+                }
+                bytes = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| AppError::bad_request(format!("đọc file: {e}")))?,
+                );
+            }
+            Some("start_s") => field_f64(
+                "start_s",
+                field.text().await.unwrap_or_default(),
+                &mut start_s,
+            ),
+            Some("end_s") => field_f64("end_s", field.text().await.unwrap_or_default(), &mut end_s),
+            Some("x") => field_f64("x", field.text().await.unwrap_or_default(), &mut x),
+            Some("y") => field_f64("y", field.text().await.unwrap_or_default(), &mut y),
+            Some("w") => field_f64("w", field.text().await.unwrap_or_default(), &mut w),
+            Some("opacity") => field_f64(
+                "opacity",
+                field.text().await.unwrap_or_default(),
+                &mut opacity,
+            ),
+            _ => {}
+        }
+    }
+    let bytes = bytes
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| AppError::bad_request("thiếu file ảnh"))?;
+
+    let oid = uuid::Uuid::new_v4().to_string();
+    let dir = st.services.work_dir.join("dub").join(&id).join("overlays");
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(AppError::internal)?;
+    let path = dir.join(format!("{oid}.{ext}"));
+    tokio::fs::write(&path, &bytes)
+        .await
+        .map_err(AppError::internal)?;
+
+    st.services
+        .db
+        .create_dub_overlay(
+            &oid,
+            &id,
+            &path.to_string_lossy(),
+            start_s.max(0.0),
+            end_s.max(0.0),
+            x.clamp(0.0, 1.0),
+            y.clamp(0.0, 1.0),
+            w.clamp(0.02, 1.0),
+            opacity.clamp(0.0, 1.0),
+        )
+        .await?;
+    let overlay = st.services.db.get_dub_overlay(&oid).await?;
+    Ok(Json(json!({ "overlay": overlay })))
+}
+
+#[derive(Deserialize)]
+struct UpdateOverlay {
+    start_s: f64,
+    end_s: f64,
+    x: f64,
+    y: f64,
+    w: f64,
+    opacity: f64,
+}
+
+async fn update_overlay(
+    State(st): State<AppState>,
+    AxPath(oid): AxPath<String>,
+    Json(b): Json<UpdateOverlay>,
+) -> Result<Json<Value>, AppError> {
+    let found = st
+        .services
+        .db
+        .update_dub_overlay(
+            &oid,
+            b.start_s.max(0.0),
+            b.end_s.max(0.0),
+            b.x.clamp(0.0, 1.0),
+            b.y.clamp(0.0, 1.0),
+            b.w.clamp(0.02, 1.0),
+            b.opacity.clamp(0.0, 1.0),
+        )
+        .await?;
+    if !found {
+        return Err(AppError::not_found("không tìm thấy overlay"));
+    }
+    let overlay = st.services.db.get_dub_overlay(&oid).await?;
+    Ok(Json(json!({ "overlay": overlay })))
+}
+
+async fn delete_overlay(
+    State(st): State<AppState>,
+    AxPath(oid): AxPath<String>,
+) -> Result<Json<Value>, AppError> {
+    if let Some(file) = st.services.db.delete_dub_overlay(&oid).await? {
+        let _ = tokio::fs::remove_file(&file).await;
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn serve_overlay_image(
+    State(st): State<AppState>,
+    AxPath(oid): AxPath<String>,
+) -> Result<Response, AppError> {
+    let ov = st
+        .services
+        .db
+        .get_dub_overlay(&oid)
+        .await?
+        .ok_or_else(|| AppError::not_found("không tìm thấy overlay"))?;
+    let path = Path::new(&ov.file);
+    let ct = img_content_type(path);
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|_| AppError::not_found("không đọc được ảnh"))?;
     Ok(([(header::CONTENT_TYPE, ct)], Bytes::from(bytes)).into_response())
 }

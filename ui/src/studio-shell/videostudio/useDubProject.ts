@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVoices, type Voice } from "../../api";
 import {
   cancelDub,
+  createOverlay,
+  deleteOverlay,
   dubVideoUrl,
   fileUrl,
   getDubInfo,
@@ -11,8 +13,11 @@ import {
   setDubSpeakerVoice,
   updateDubSegment,
   updateDubSettings,
+  updateOverlay,
   type DubDetail,
   type DubMediaInfo,
+  type DubOverlay,
+  type DubOverlayGeo,
   type DubSettings,
   type DubStep,
   type VoiceClone,
@@ -65,6 +70,11 @@ export interface DubProjectHook {
   setSegment: (segId: string, textVi: string, voice: string | null) => Promise<void>;
   setAllSpeakerVoice: (voice: string | null) => Promise<void>;
   reshorten: () => Promise<void>;
+  /** Image/banner overlays. */
+  overlays: DubOverlay[];
+  addOverlay: (file: Blob, geo?: Partial<DubOverlayGeo>) => Promise<void>;
+  patchOverlay: (oid: string, geo: DubOverlayGeo) => Promise<void>;
+  removeOverlay: (oid: string) => Promise<void>;
 }
 
 /** Real video-dubbing project state: loads + polls a project, exposes the pipeline. */
@@ -231,6 +241,41 @@ export function useDubProject(id: string): DubProjectHook {
     }
   }, [id, refresh]);
 
+  const addOverlay = useCallback(
+    async (file: Blob, geo?: Partial<DubOverlayGeo>) => {
+      setErr(null);
+      try {
+        await createOverlay(id, file, geo);
+        await refresh();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [id, refresh],
+  );
+  const patchOverlay = useCallback(
+    async (oid: string, geo: DubOverlayGeo) => {
+      try {
+        await updateOverlay(oid, geo);
+        await refresh();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [refresh],
+  );
+  const removeOverlay = useCallback(
+    async (oid: string) => {
+      try {
+        await deleteOverlay(oid);
+        await refresh();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [refresh],
+  );
+
   const segments = detail?.segments ?? [];
   // Engine presets + on-disk clones (bundled voice pack + user clones). Clones
   // are stored as `clone:<id>` and resolved to a ref_id at synth time.
@@ -274,5 +319,9 @@ export function useDubProject(id: string): DubProjectHook {
     setSegment,
     setAllSpeakerVoice,
     reshorten,
+    overlays: detail?.overlays ?? [],
+    addOverlay,
+    patchOverlay,
+    removeOverlay,
   };
 }

@@ -483,6 +483,20 @@ pub struct ExportOpts<'a> {
     /// Frame size in pixels — when present, the blur edges are feathered (needs
     /// pixel coords for the soft alpha mask); without it, a hard-edged fallback.
     pub frame: Option<(u32, u32)>,
+    /// Image/banner overlays burned over the video for their time range.
+    pub overlays: Vec<OverlayArg<'a>>,
+}
+
+/// One image overlay for the export: a file placed at a fractional position/size
+/// over `[start, end]` (end ≤ start ⇒ always shown).
+pub struct OverlayArg<'a> {
+    pub path: &'a Path,
+    pub start: f64,
+    pub end: f64,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub opacity: f64,
 }
 
 /// Build the blur filterchain producing `[vb]`. With known frame dimensions the
@@ -587,12 +601,52 @@ pub fn export_video_args(video: &Path, voice: &Path, out: &Path, opts: &ExportOp
         ));
         vlabel = "[vs]".to_string();
     }
+
+    // Image/banner overlays, each on its own input, scaled to a fraction of the
+    // frame width, faded by `opacity`, and shown only over its time range. Inputs
+    // come after the optional soft-subtitle input (index 2).
+    let overlay_base_idx = 2 + usize::from(opts.subtitles_soft.is_some());
+    let mut overlay_paths: Vec<String> = Vec::new();
+    for (i, ov) in opts.overlays.iter().enumerate() {
+        let inp = overlay_base_idx + i;
+        overlay_paths.push(s(ov.path));
+        let base = if vchain.is_empty() {
+            "[0:v]".to_string()
+        } else {
+            vlabel.clone()
+        };
+        let scale = match opts.frame {
+            Some((vw, _)) => format!("scale={}:-1", ((vw as f64 * ov.w).round() as i64).max(2)),
+            None => "scale=iw:-1".to_string(),
+        };
+        let en = if ov.end > ov.start {
+            format!(
+                ":enable='between(t,{:.3},{:.3})'",
+                ov.start.max(0.0),
+                ov.end
+            )
+        } else {
+            String::new()
+        };
+        vchain.push(format!(
+            "[{inp}:v]{scale},format=rgba,colorchannelmixer=aa={op:.3}[ovi{i}];{base}[ovi{i}]overlay=W*{x:.4}:H*{y:.4}{en}[vov{i}]",
+            op = ov.opacity.clamp(0.0, 1.0),
+            x = ov.x.clamp(0.0, 1.0),
+            y = ov.y.clamp(0.0, 1.0),
+        ));
+        vlabel = format!("[vov{i}]");
+    }
+
     let filtered = !vchain.is_empty();
 
     let mut args = vec!["-y".into(), "-i".into(), s(video), "-i".into(), s(voice)];
     if let Some(soft) = opts.subtitles_soft {
         args.push("-i".into());
         args.push(s(soft)); // input index 2
+    }
+    for p in &overlay_paths {
+        args.push("-i".into());
+        args.push(p.clone());
     }
 
     let fc = if filtered {
@@ -1010,6 +1064,7 @@ mod tests {
             sub_color: None,
             blur: None,
             frame: None,
+            overlays: vec![],
         };
         let a = export_video_args(&p("v.mp4"), &p("vn.wav"), &p("o.mp4"), &o);
         let j = a.join(" ");
@@ -1031,6 +1086,7 @@ mod tests {
             sub_color: Some("#FFE082"),
             blur: Some((0.1, 0.84, 0.8, 0.14)),
             frame: Some((1000, 500)),
+            overlays: vec![],
         };
         let a = export_video_args(&p("v.mp4"), &p("vn.wav"), &p("o.mp4"), &o);
         let j = a.join(" ");
@@ -1059,6 +1115,7 @@ mod tests {
             sub_color: None,
             blur: Some((0.1, 0.84, 0.8, 0.14)),
             frame: None,
+            overlays: vec![],
         };
         let j = export_video_args(&p("v.mp4"), &p("vn.wav"), &p("o.mp4"), &o).join(" ");
         assert!(j.contains("overlay=W*0.1000:H*0.8400"));
@@ -1078,6 +1135,7 @@ mod tests {
             sub_color: None,
             blur: None,
             frame: None,
+            overlays: vec![],
         };
         let a = export_video_args(&p("v.mp4"), &p("vn.wav"), &p("o.mp4"), &o);
         let j = a.join(" ");

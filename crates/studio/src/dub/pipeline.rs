@@ -535,6 +535,20 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
         None
     };
 
+    let overlays = services.db.list_dub_overlays(project_id).await?;
+    let overlay_args: Vec<media::OverlayArg> = overlays
+        .iter()
+        .map(|o| media::OverlayArg {
+            path: Path::new(&o.file),
+            start: o.start_s,
+            end: o.end_s,
+            x: o.x,
+            y: o.y,
+            w: o.w,
+            opacity: o.opacity,
+        })
+        .collect();
+
     let opts = media::ExportOpts {
         original_volume: project.original_volume,
         vn_volume: project.vn_volume,
@@ -566,6 +580,7 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
             None
         },
         frame,
+        overlays: overlay_args,
     };
     media::run_ffmpeg(&media::export_video_args(
         Path::new(&project.video_path),

@@ -82,6 +82,20 @@ impl DubSegment {
     }
 }
 
+/// An image/banner placed over the video for a time range (fractional geometry).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DubOverlay {
+    pub id: String,
+    pub project_id: String,
+    pub file: String,
+    pub start_s: f64,
+    pub end_s: f64,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub opacity: f64,
+}
+
 /// A detected speaker, its best-effort gender/age, and the assigned voice.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DubSpeaker {

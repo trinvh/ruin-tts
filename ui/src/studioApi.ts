@@ -54,7 +54,12 @@ export type DubSegment = {
   tts_path: string | null; fitted_path: string | null; factor: number | null; status: string;
 };
 export type DubSpeaker = { speaker: string; gender: string | null; age: number | null; voice: string | null };
-export type DubDetail = { project: DubProject; segments: DubSegment[]; speakers: DubSpeaker[] };
+export type DubOverlay = {
+  id: string; project_id: string; file: string;
+  start_s: number; end_s: number; x: number; y: number; w: number; opacity: number;
+};
+export type DubOverlayGeo = { start_s: number; end_s: number; x: number; y: number; w: number; opacity: number };
+export type DubDetail = { project: DubProject; segments: DubSegment[]; speakers: DubSpeaker[]; overlays: DubOverlay[] };
 
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => "")}`);
@@ -158,6 +163,28 @@ export async function setDubSpeakerVoice(id: string, speaker: string, voice: str
 }
 export async function dubVideoUrl(id: string): Promise<string> {
   return `${await base()}/api/dub/projects/${id}/video`;
+}
+
+// ── Image/banner overlays ────────────────────────────────────────────────────
+export async function createOverlay(projectId: string, file: Blob, geo?: Partial<DubOverlayGeo>): Promise<DubOverlay> {
+  const fd = new FormData();
+  fd.append("file", file, (file as File).name || "banner.png");
+  for (const [k, v] of Object.entries(geo ?? {})) if (v !== undefined) fd.append(k, String(v));
+  const r = await fetch(`${await base()}/api/dub/projects/${projectId}/overlays`, { method: "POST", body: fd });
+  return (await j<{ overlay: DubOverlay }>(r)).overlay;
+}
+export async function updateOverlay(oid: string, geo: DubOverlayGeo): Promise<DubOverlay> {
+  const r = await fetch(`${await base()}/api/dub/overlays/${oid}`, {
+    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(geo),
+  });
+  return (await j<{ overlay: DubOverlay }>(r)).overlay;
+}
+export async function deleteOverlay(oid: string): Promise<void> {
+  const r = await fetch(`${await base()}/api/dub/overlays/${oid}`, { method: "DELETE" });
+  if (!r.ok) throw new Error(`${r.status}: ${await r.text().catch(() => "")}`);
+}
+export async function overlayImageUrl(oid: string): Promise<string> {
+  return `${await base()}/api/dub/overlays/${oid}/image`;
 }
 export type DubMediaInfo = {
   duration: number | null;

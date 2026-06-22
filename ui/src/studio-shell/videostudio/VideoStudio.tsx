@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { C, FONT } from "../theme";
 import { useStudio } from "./useStudio";
 import { useDubProject } from "./useDubProject";
@@ -27,7 +27,18 @@ interface Props {
  */
 export function VideoStudio({ projectId, title: initialTitle }: Props) {
   const dub = useDubProject(projectId);
-  const { state, actions } = useStudio();
+  // Trimming/moving an overlay clip on the timeline persists its time range.
+  const onTrimCommit = useCallback(
+    (clipId: string, start: number, dur: number) => {
+      if (!clipId.startsWith("ovl_")) return;
+      const oid = clipId.slice(4);
+      const o = dub.overlays.find((v) => v.id === oid);
+      if (!o) return;
+      void dub.patchOverlay(oid, { start_s: start, end_s: start + dur, x: o.x, y: o.y, w: o.w, opacity: o.opacity });
+    },
+    [dub],
+  );
+  const { state, actions } = useStudio(onTrimCommit);
   const transport = useTransport();
   const history = useEditorHistory(dub);
   const [title, setTitle] = useState(initialTitle ?? "Dự án lồng tiếng");

@@ -1,12 +1,15 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { C, MONO } from "../theme";
 import { Icon } from "../icons";
 import { HoverBox } from "../ui";
 import { fmt } from "./constants";
+import { OverlayLayer } from "./OverlayLayer";
 import type { StudioActions, StudioState } from "./useStudio";
 import type { DubProjectHook } from "./useDubProject";
 import type { Transport } from "./useTransport";
 import type { Aspect } from "./types";
+
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
 interface Props {
   state: StudioState;
@@ -21,6 +24,18 @@ const ASPECTS: Aspect[] = ["9:16", "1:1", "16:9"];
 
 export function PreviewStage({ state, actions, dub, transport }: Props) {
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDropActive(false);
+    const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("image/"));
+    if (!file) return;
+    const box = boxRef.current?.getBoundingClientRect();
+    const x = box ? clamp01((e.clientX - box.left) / box.width - 0.15) : 0.05;
+    const y = box ? clamp01((e.clientY - box.top) / box.height - 0.1) : 0.05;
+    void dub.addOverlay(file, { x, y, w: 0.3, opacity: 1, start_s: 0, end_s: 0 });
+  };
   const { subStyle, aspect } = state;
   const t = transport.time;
   const total = transport.duration || dub.duration;
@@ -68,7 +83,13 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
           backgroundPosition: "0 0,0 11px,11px -11px,-11px 0",
         }}
       >
-        <div ref={(el) => { actions.setPrev(el); boxRef.current = el; }} style={{ position: "relative", height: "100%", aspectRatio: aspectCss, maxWidth: "100%", borderRadius: 6, overflow: "hidden", background: "#000", boxShadow: "0 10px 40px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.05)" }}>
+        <div
+          ref={(el) => { actions.setPrev(el); boxRef.current = el; }}
+          onDragOver={(e) => { e.preventDefault(); setDropActive(true); }}
+          onDragLeave={() => setDropActive(false)}
+          onDrop={onDrop}
+          style={{ position: "relative", height: "100%", aspectRatio: aspectCss, maxWidth: "100%", borderRadius: 6, overflow: "hidden", background: "#000", boxShadow: dropActive ? `0 0 0 2px ${C.coral}` : "0 10px 40px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.05)" }}
+        >
           <video
             ref={(el) => transport.attachVideo(el)}
             src={dub.videoUrl || undefined}
@@ -95,6 +116,12 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
               <div style={{ display: "inline-block", background: subStyle.bg ? "rgba(0,0,0,.55)" : "transparent", padding: "4px 12px", borderRadius: 7 }}>
                 <span style={{ fontWeight: 700, color: subStyle.color, textShadow: "0 1px 4px rgba(0,0,0,.85)", fontSize: Math.round(subStyle.size * 0.62) }}>{capVi || capZh}</span>
               </div>
+            </div>
+          )}
+          <OverlayLayer overlays={dub.overlays} time={t} stageRef={boxRef} onUpdate={(oid, geo) => void dub.patchOverlay(oid, geo)} onDelete={(oid) => void dub.removeOverlay(oid)} />
+          {dropActive && (
+            <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "rgba(234,124,105,.18)", color: "#fff", pointerEvents: "none", fontSize: 13, fontWeight: 600 }}>
+              Thả ảnh banner vào đây
             </div>
           )}
         </div>

@@ -34,6 +34,13 @@ export function buildClips(detail: DubDetail | null, duration: number): Clip[] {
   if (hasTts) {
     for (const s of segs) clips.push({ id: "tts_" + s.id, track: "TTS", type: "audio", kind: "tts", name: s.text_vi || "TTS", srcVideo: "vid", start: s.start_s, dur: segDur(s), vol: 100, speed: 100, fadeIn: 0, fadeOut: 0 });
   }
+  // Image/banner overlays on the IMG track — dragging/trimming the clip edits the
+  // overlay's time range (see VideoStudio onTrimCommit).
+  for (const o of detail.overlays ?? []) {
+    const start = Math.max(0, o.start_s);
+    const odur = o.end_s > o.start_s ? o.end_s - o.start_s : dur - start;
+    clips.push({ id: "ovl_" + o.id, track: "IMG", type: "image", name: "Banner", start, dur: Math.max(0.3, odur), scale: 100, posY: 0, opacity: Math.round(o.opacity * 100), ox: o.x * 100, oy: o.y * 100 });
+  }
   return clips;
 }
 
@@ -41,7 +48,8 @@ export function buildClips(detail: DubDetail | null, duration: number): Clip[] {
 export function clipSignature(detail: DubDetail | null, duration: number): string {
   if (!detail) return `none:${duration}`;
   const p = detail.project;
-  return `${p.status}:${Math.round(duration)}:${p.original_volume}:${detail.segments.map((s) => s.id + "=" + s.text_vi.length + "/" + s.text_src.length).join(",")}`;
+  const ov = detail.overlays.map((o) => `${o.id}@${o.start_s.toFixed(1)}-${o.end_s.toFixed(1)}`).join(",");
+  return `${p.status}:${Math.round(duration)}:${p.original_volume}:${detail.segments.map((s) => s.id + "=" + s.text_vi.length + "/" + s.text_src.length).join(",")}:${ov}`;
 }
 
 /** Map a seeded subtitle clip id back to its segment id (or null). */

@@ -57,7 +57,9 @@ export interface StudioRefs {
   lane: React.MutableRefObject<HTMLElement | null>;
 }
 
-export function useStudio(): { state: StudioState; actions: StudioActions; refs: StudioRefs } {
+export function useStudio(
+  onTrimCommit?: (clipId: string, start: number, dur: number) => void,
+): { state: StudioState; actions: StudioActions; refs: StudioRefs } {
   const [state, setState] = useState<StudioState>(initialState);
 
   const stateRef = useRef(state);
@@ -142,10 +144,16 @@ export function useStudio(): { state: StudioState; actions: StudioActions; refs:
   }, [update]);
 
   const onUp = useCallback(() => {
+    // On the end of a clip move/trim, persist the new range (used for overlay clips).
+    const draggedId = dragRef.current?.id;
     dragRef.current = null;
     seekRef.current = false;
     imgDragRef.current = null;
-  }, []);
+    if (draggedId && onTrimCommit) {
+      const c = stateRef.current.clips.find((x) => x.id === draggedId);
+      if (c) onTrimCommit(c.id, c.start, c.dur);
+    }
+  }, [onTrimCommit]);
 
   useEffect(() => {
     const move = (e: PointerEvent) => onMove(e);

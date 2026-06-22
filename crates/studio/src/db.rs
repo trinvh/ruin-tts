@@ -35,6 +35,20 @@ fn row_to_voice_clone(r: sqlx::sqlite::SqliteRow) -> VoiceClone {
     }
 }
 
+fn row_to_dub_overlay(r: sqlx::sqlite::SqliteRow) -> crate::dub::DubOverlay {
+    crate::dub::DubOverlay {
+        id: r.get("id"),
+        project_id: r.get("project_id"),
+        file: r.get("file"),
+        start_s: r.get("start_s"),
+        end_s: r.get("end_s"),
+        x: r.get("x"),
+        y: r.get("y"),
+        w: r.get("w"),
+        opacity: r.get("opacity"),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Selection {
     pub slug: String,
@@ -774,6 +788,102 @@ impl Db {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    // ── Image/banner overlays ─────────────────────────────────────────────────
+    pub async fn list_dub_overlays(&self, project_id: &str) -> Result<Vec<crate::dub::DubOverlay>> {
+        let rows = sqlx::query(
+            "SELECT id, project_id, file, start_s, end_s, x, y, w, opacity \
+             FROM dub_overlays WHERE project_id = ? ORDER BY created_at",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(row_to_dub_overlay).collect())
+    }
+
+    pub async fn get_dub_overlay(&self, id: &str) -> Result<Option<crate::dub::DubOverlay>> {
+        let row = sqlx::query(
+            "SELECT id, project_id, file, start_s, end_s, x, y, w, opacity \
+             FROM dub_overlays WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(row_to_dub_overlay))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_dub_overlay(
+        &self,
+        id: &str,
+        project_id: &str,
+        file: &str,
+        start_s: f64,
+        end_s: f64,
+        x: f64,
+        y: f64,
+        w: f64,
+        opacity: f64,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO dub_overlays (id, project_id, file, start_s, end_s, x, y, w, opacity) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(project_id)
+        .bind(file)
+        .bind(start_s)
+        .bind(end_s)
+        .bind(x)
+        .bind(y)
+        .bind(w)
+        .bind(opacity)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update the geometry/timing of an overlay. Returns false if it doesn't exist.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_dub_overlay(
+        &self,
+        id: &str,
+        start_s: f64,
+        end_s: f64,
+        x: f64,
+        y: f64,
+        w: f64,
+        opacity: f64,
+    ) -> Result<bool> {
+        let r = sqlx::query(
+            "UPDATE dub_overlays SET start_s = ?, end_s = ?, x = ?, y = ?, w = ?, opacity = ? WHERE id = ?",
+        )
+        .bind(start_s)
+        .bind(end_s)
+        .bind(x)
+        .bind(y)
+        .bind(w)
+        .bind(opacity)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    /// Delete an overlay, returning its file path (so the caller can remove it).
+    pub async fn delete_dub_overlay(&self, id: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT file FROM dub_overlays WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(r) = row else { return Ok(None) };
+        let file: String = r.get("file");
+        sqlx::query("DELETE FROM dub_overlays WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(Some(file))
     }
 
     pub async fn set_dub_segment_synth(
