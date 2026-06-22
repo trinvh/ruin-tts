@@ -43,6 +43,11 @@ struct JobCreated {
 }
 
 #[derive(Debug, Deserialize)]
+struct CloneResponse {
+    ref_id: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct JobView {
     status: String,
     ready: bool,
@@ -122,6 +127,27 @@ impl TtsClient {
         }
         Err(anyhow::Error::new(last.expect("retry ran at least once"))
             .context(format!("{what} (sau khi thử lại)")))
+    }
+
+    /// Register a cloned voice from a reference WAV (`POST /v1/clone`), returning
+    /// the server-side `ref_id` to use in synthesis. The handle lives in the TTS
+    /// server's memory until it restarts, so callers should cache + re-clone.
+    pub async fn clone_voice(&self, wav: Vec<u8>) -> Result<String> {
+        let url = format!("{}/v1/clone", self.base_url);
+        let part = reqwest::multipart::Part::bytes(wav)
+            .file_name("ref.wav")
+            .mime_str("audio/wav")?;
+        let form = reqwest::multipart::Form::new().part("file", part);
+        let resp: CloneResponse = self
+            .http
+            .post(&url)
+            .multipart(form)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(resp.ref_id)
     }
 
     /// List the voices offered by the server (`GET /v1/voices`).
@@ -212,19 +238,25 @@ impl TtsClient {
     }
 
     /// Synthesize with caching; returns the path to the cached audio file.
+    ///
+    /// `cache_voice` is the STABLE voice label used in the cache key — pass the
+    /// preset name or a `clone:<id>` handle, not the volatile per-session `ref_id`
+    /// (which changes every run and would defeat the cache).
     pub async fn synth_cached(
         &self,
         cache_dir: &Path,
         chapter_id: &str,
         version: u32,
         req: &SynthRequest,
+        cache_voice: &str,
     ) -> Result<PathBuf> {
-        let voice = req
-            .voice
-            .as_deref()
-            .or(req.ref_id.as_deref())
-            .unwrap_or("default");
-        let key = cache_key(chapter_id, voice, version, &sampling_sig(req), &req.text);
+        let key = cache_key(
+            chapter_id,
+            cache_voice,
+            version,
+            &sampling_sig(req),
+            &req.text,
+        );
         let path = cache_dir.join(format!("{key}.{}", req.format));
         if path.exists() {
             return Ok(path);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getVoices } from "../api";
 import { isTauri, openExternal, pickDirectory } from "../platform";
 import { useTtsSettings } from "../ttsSettings";
 import {
@@ -436,15 +437,81 @@ function SectionKeys({ cfg, set }: SectionKeysProps) {
           placeholder="https://api.ruin.vn"
         />
       </FieldRow>
-      <FieldRow label="Beesoft TTS base" hint="URL máy chủ TTS">
-        <FocusInput
-          mono
-          value={cfg.tts_base}
-          onChange={(e) => set({ tts_base: e.target.value })}
-          placeholder="http://127.0.0.1:8080"
-        />
-      </FieldRow>
     </>
+  );
+}
+
+// ── Voice picker (preset engine voices + cloned voices, incl. the bundled pack) ─
+
+type VoiceOption = { value: string; label: string };
+type VoiceOptions = { presets: VoiceOption[]; clones: VoiceOption[] };
+
+/** Fetch the engine's preset voices + the on-disk clones for the dub voice picker. */
+function useVoiceOptions(): VoiceOptions {
+  const [opts, setOpts] = useState<VoiceOptions>({ presets: [], clones: [] });
+  useEffect(() => {
+    let alive = true;
+    Promise.allSettled([getVoices(), listClones()]).then(([pv, cl]) => {
+      if (!alive) return;
+      const presets: VoiceOption[] =
+        pv.status === "fulfilled"
+          ? pv.value.map((v) => ({ value: v.id, label: v.label || v.id }))
+          : [];
+      const clones: VoiceOption[] =
+        cl.status === "fulfilled"
+          ? cl.value.map((c) => ({
+              value: `clone:${c.id}`,
+              label: c.builtin ? `${c.name} (có sẵn)` : c.name,
+            }))
+          : [];
+      setOpts({ presets, clones });
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return opts;
+}
+
+interface VoiceSelectProps {
+  options: VoiceOptions;
+  value: string;
+  onChange: (value: string) => void;
+}
+
+function VoiceSelect({ options, value, onChange }: VoiceSelectProps) {
+  const known =
+    !value ||
+    options.presets.some((o) => o.value === value) ||
+    options.clones.some((o) => o.value === value);
+  return (
+    <select
+      style={selectStyle}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="">Tự chọn theo giới tính</option>
+      {options.presets.length > 0 && (
+        <optgroup label="Giọng có sẵn (engine)">
+          {options.presets.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {options.clones.length > 0 && (
+        <optgroup label="Giọng nhân bản / bộ giọng">
+          {options.clones.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {/* Preserve a legacy/free-text value that isn't in either list. */}
+      {!known && <option value={value}>{value}</option>}
+    </select>
   );
 }
 
@@ -456,6 +523,7 @@ interface SectionDubProps {
 }
 
 function SectionDub({ cfg, set }: SectionDubProps) {
+  const voiceOptions = useVoiceOptions();
   return (
     <>
       <NoteBlock>
@@ -483,34 +551,24 @@ function SectionDub({ cfg, set }: SectionDubProps) {
           placeholder="gemini-2.5-flash"
         />
       </FieldRow>
-      <FieldRow label="Media-AI base" hint="URL sidecar nhận diện giọng (tự động)">
-        <FocusInput
-          mono
-          value={cfg.media_ai_base}
-          onChange={(e) => set({ media_ai_base: e.target.value })}
-          placeholder="http://127.0.0.1:8099"
-        />
-      </FieldRow>
       <FieldRow
         label="Giọng nam ưu tiên"
         hint="Để trống = tự chọn theo giới tính"
       >
-        <FocusInput
-          mono
+        <VoiceSelect
+          options={voiceOptions}
           value={cfg.dub_voice_male}
-          onChange={(e) => set({ dub_voice_male: e.target.value })}
-          placeholder="để trống = tự chọn"
+          onChange={(v) => set({ dub_voice_male: v })}
         />
       </FieldRow>
       <FieldRow
         label="Giọng nữ ưu tiên"
         hint="Để trống = tự chọn theo giới tính"
       >
-        <FocusInput
-          mono
+        <VoiceSelect
+          options={voiceOptions}
           value={cfg.dub_voice_female}
-          onChange={(e) => set({ dub_voice_female: e.target.value })}
-          placeholder="để trống = tự chọn"
+          onChange={(v) => set({ dub_voice_female: v })}
         />
       </FieldRow>
 

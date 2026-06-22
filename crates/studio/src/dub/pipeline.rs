@@ -208,6 +208,7 @@ pub async fn synthesize(services: &Services, project_id: &str) -> Result<()> {
     ensure_dir(&dir).await?;
 
     let tts = services.tts().await;
+    let ref_cache = std::sync::Mutex::new(HashMap::new());
     for seg in &segs {
         if seg.text_vi.trim().is_empty() {
             continue;
@@ -221,6 +222,7 @@ pub async fn synthesize(services: &Services, project_id: &str) -> Result<()> {
             seg,
             &voice,
             project.speed_cap,
+            &ref_cache,
         )
         .await?;
     }
@@ -233,6 +235,40 @@ pub async fn synthesize(services: &Services, project_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Resolve a dub voice into a `SynthRequest` voice selection. A `clone:<id>`
+/// handle is registered with the TTS server (once per run, cached) and used via
+/// `ref_id`; a plain preset name passes through as `voice`.
+async fn resolve_clone_voice(
+    services: &Services,
+    tts: &crate::tts::TtsClient,
+    voice: &str,
+    ref_cache: &std::sync::Mutex<HashMap<String, String>>,
+) -> Result<(Option<String>, Option<String>)> {
+    let Some(id) = voice.strip_prefix("clone:") else {
+        return Ok((Some(voice.to_string()), None));
+    };
+    if let Some(r) = ref_cache.lock().unwrap().get(id).cloned() {
+        return Ok((None, Some(r)));
+    }
+    let clone = services
+        .db
+        .get_voice_clone(id)
+        .await?
+        .ok_or_else(|| anyhow!("giọng nhân bản '{id}' không tồn tại"))?;
+    let bytes = tokio::fs::read(&clone.file)
+        .await
+        .with_context(|| format!("đọc mẫu giọng {}", clone.file))?;
+    let ref_id = tts
+        .clone_voice(bytes)
+        .await
+        .context("đăng ký giọng nhân bản với máy chủ TTS")?;
+    ref_cache
+        .lock()
+        .unwrap()
+        .insert(id.to_string(), ref_id.clone());
+    Ok((None, Some(ref_id)))
+}
+
 /// Synthesize + time-fit a single segment (shared by full synth and reshorten).
 async fn synth_one(
     services: &Services,
@@ -242,11 +278,13 @@ async fn synth_one(
     seg: &DubSegment,
     voice: &str,
     speed_cap: f64,
+    ref_cache: &std::sync::Mutex<HashMap<String, String>>,
 ) -> Result<()> {
+    let (voice_sel, ref_id) = resolve_clone_voice(services, tts, voice, ref_cache).await?;
     let req = SynthRequest {
         text: seg.text_vi.clone(),
-        voice: Some(voice.to_string()),
-        ref_id: None,
+        voice: voice_sel,
+        ref_id,
         emotion: profile.emotion.clone(),
         format: "wav".into(),
         temperature: Some(profile.voice_temperature),
@@ -256,8 +294,16 @@ async fn synth_one(
         silence_p: Some(0.0),
         paragraph_silence_p: Some(0.0),
     };
+    // Cache key uses the stable `voice` label (preset name or `clone:<id>`),
+    // never the per-session ref_id.
     let tts_path = tts
-        .synth_cached(&services.cache_dir, &seg.id, profile.workflow_version, &req)
+        .synth_cached(
+            &services.cache_dir,
+            &seg.id,
+            profile.workflow_version,
+            &req,
+            voice,
+        )
         .await
         .with_context(|| format!("đọc câu {} ({voice})", seg.idx))?;
     let dur = media::probe_duration(&tts_path).await.unwrap_or(0.0);
@@ -336,6 +382,7 @@ pub async fn reshorten_long(services: &Services, project_id: &str) -> Result<usi
     let profile = services.profile().await;
     let dir = project_dir(services, project_id);
     let tts = services.tts().await;
+    let ref_cache = std::sync::Mutex::new(HashMap::new());
 
     let mut count = 0;
     for seg in long {
@@ -352,6 +399,7 @@ pub async fn reshorten_long(services: &Services, project_id: &str) -> Result<usi
                 &updated,
                 &voice,
                 project.speed_cap,
+                &ref_cache,
             )
             .await?;
             count += 1;
