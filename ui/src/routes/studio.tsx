@@ -44,9 +44,27 @@ function estDur(len: number): string {
   return fmtTime(Math.max(0, Math.floor(len / 14)));
 }
 
+// Page-local keyframes (recording-dot pulse + new-clone flash). Injected once,
+// kept here so the shared theme stylesheet stays untouched.
+const TTS_STYLE_ID = "beesoft-tts-styles";
+function injectTtsStyles(): void {
+  if (typeof document === "undefined") return;
+  if (document.getElementById(TTS_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = TTS_STYLE_ID;
+  style.textContent = `
+@keyframes bss-rec-pulse{0%{box-shadow:0 0 0 0 rgba(234,124,105,.55);}70%{box-shadow:0 0 0 7px rgba(234,124,105,0);}100%{box-shadow:0 0 0 0 rgba(234,124,105,0);}}
+.bss .bss-rec-dot{animation:bss-rec-pulse 1.1s ease-out infinite;}
+@keyframes bss-flash-kf{0%{background:rgba(80,209,170,.32);}100%{background:rgba(80,209,170,0);}}
+.bss .bss-flash{animation:bss-flash-kf 2.4s ease-out 1;border-radius:8px;}
+`;
+  document.head.appendChild(style);
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export function StudioPage() {
   injectStudioStyles();
+  injectTtsStyles();
 
   const { outputDir, concurrency } = useTtsSettings();
   const [status, setStatus] = useState<Status>("starting");
@@ -76,12 +94,16 @@ export function StudioPage() {
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [cloning, setCloning] = useState(false);
+  const [recSeconds, setRecSeconds] = useState(0);
+  const [justSaved, setJustSaved] = useState<{ id: string; name: string } | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecRef = useRef<MediaRecorder | null>(null);
   const recChunksRef = useRef<Blob[]>([]);
+  const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const queue = useQueue(outputDir, concurrency);
 
@@ -133,6 +155,14 @@ export function StudioPage() {
       el.removeEventListener("play", onPlay);
       el.removeEventListener("pause", onPause);
       el.removeEventListener("ended", onEnded);
+    };
+  }, []);
+
+  // Clean up recording / confirmation timers on unmount.
+  useEffect(() => {
+    return () => {
+      if (recTimerRef.current) clearInterval(recTimerRef.current);
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
     };
   }, []);
 
@@ -267,7 +297,17 @@ export function StudioPage() {
     if (!name) return;
     setCloning(true);
     try {
-      setClones(await addClone(name, wav));
+      const before = loadClones().map((c) => c.id);
+      const next = await addClone(name, wav);
+      setClones(next);
+      // Identify the newly added clone, select it, and flash a confirmation.
+      const added = next.find((c) => !before.includes(c.id)) ?? next[next.length - 1];
+      if (added) {
+        setVoice(added.id);
+        setJustSaved({ id: added.id, name: added.name });
+        if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+        savedTimerRef.current = setTimeout(() => setJustSaved(null), 4000);
+      }
     } catch (e) {
       alert("Không nhân bản được giọng: " + (e instanceof Error ? e.message : String(e)));
     } finally {
@@ -290,6 +330,10 @@ export function StudioPage() {
       };
       mr.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
+        if (recTimerRef.current) {
+          clearInterval(recTimerRef.current);
+          recTimerRef.current = null;
+        }
         setRecording(false);
         const raw = new Blob(recChunksRef.current, { type: mr.mimeType || "audio/webm" });
         try {
@@ -302,8 +346,15 @@ export function StudioPage() {
       mediaRecRef.current = mr;
       mr.start();
       setRecording(true);
+      setRecSeconds(0);
+      if (recTimerRef.current) clearInterval(recTimerRef.current);
+      recTimerRef.current = setInterval(() => setRecSeconds((s) => s + 1), 1000);
     } catch (e) {
-      alert("Không truy cập được micro: " + (e instanceof Error ? e.message : String(e)));
+      alert(
+        "Không truy cập được micro — cấp quyền micro cho ứng dụng rồi thử lại. (" +
+          (e instanceof Error ? e.message : String(e)) +
+          ")",
+      );
     }
   }, [recording, commitClone]);
 
@@ -540,6 +591,12 @@ export function StudioPage() {
       color: C.muted3,
       marginBottom: 6,
     },
+    cloneHelper: {
+      fontSize: 11,
+      lineHeight: 1.45,
+      color: C.muted3,
+      marginBottom: 8,
+    },
     cloneHint: {
       fontSize: 10,
       color: C.muted3,
@@ -560,6 +617,46 @@ export function StudioPage() {
       cursor: busy ? "not-allowed" : "pointer",
       opacity: busy && !rec ? 0.5 : 1,
     }),
+    recBar: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      padding: "8px 10px",
+      borderRadius: 8,
+      border: `1px solid ${C.coral}`,
+      background: "rgba(234,124,105,.12)",
+    },
+    recDot: {
+      width: 9,
+      height: 9,
+      borderRadius: "50%",
+      background: C.coral,
+      flexShrink: 0,
+      boxShadow: "0 0 0 0 rgba(234,124,105,.6)",
+    },
+    recLabel: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: C.coral,
+      fontFamily: MONO,
+    },
+    recStopBtn: {
+      padding: "4px 10px",
+      borderRadius: 6,
+      border: `1px solid ${C.coral}`,
+      background: C.coral,
+      color: "#fff",
+      fontSize: 11,
+      fontWeight: 600,
+      cursor: "pointer",
+      flexShrink: 0,
+    },
+    savedNote: {
+      marginTop: 8,
+      fontSize: 11,
+      fontWeight: 600,
+      color: C.teal,
+    },
 
     // CENTER PANEL
     centerPanel: {
@@ -741,12 +838,19 @@ export function StudioPage() {
       height: 36,
       borderRadius: 8,
       border: `1px solid ${selected ? C.purple : C.border}`,
-      background: selected ? "rgba(146,136,224,.15)" : C.panel2,
-      color: selected ? C.purpleLt : C.muted,
+      background: selected ? "rgba(146,136,224,.22)" : C.panel2,
+      color: selected ? "#fff" : C.muted,
       fontSize: 12,
+      fontWeight: selected ? 600 : 400,
       cursor: "pointer",
       transition: "all .12s",
     }),
+    moodNote: {
+      marginTop: 8,
+      fontSize: 10.5,
+      lineHeight: 1.45,
+      color: C.muted3,
+    },
     sliderRow: {
       marginBottom: 10,
     },
@@ -838,12 +942,22 @@ export function StudioPage() {
   };
 
   const LABELS = ["cười", "thở dài", "hắng giọng", "ngập ngừng", "nhấn mạnh"];
-  const MOODS: Array<[string, string]> = [
-    ["natural", "Tự nhiên"],
-    ["storytelling", "Kể chuyện"],
-    ["news", "Tin tức"],
-    ["emotional", "Cảm xúc"],
+  // [presetKey, label, emotion token, temperature preset]. The model only
+  // distinguishes natural vs non-natural for the emotion token, so the audible
+  // variety between non-natural moods comes from the temperature preset.
+  const MOODS: Array<[string, string, string, number]> = [
+    ["natural", "Tự nhiên", "natural", 0.8],
+    ["storytelling", "Kể chuyện", "storytelling", 0.7],
+    ["news", "Tin tức", "storytelling", 0.6],
+    ["emotional", "Cảm xúc", "storytelling", 0.95],
   ];
+  const activeMood = MOODS.find(
+    ([, , em, temp]) => em === emotion && Math.abs(temp - temperature) < 1e-6,
+  )?.[0];
+  const applyMood = (em: string, temp: number) => {
+    setEmotion(em);
+    setTemperature(temp);
+  };
 
   return (
     <div style={$.root} className="bss">
@@ -920,6 +1034,7 @@ export function StudioPage() {
                 <div
                   key={cv.id}
                   style={$.voiceRow(selected)}
+                  className={justSaved?.id === cv.id ? "bss-flash" : undefined}
                   onClick={() => setVoice(cv.id)}
                   role="button"
                   tabIndex={0}
@@ -966,25 +1081,50 @@ export function StudioPage() {
           {/* Clone section */}
           <div style={$.cloneSection}>
             <div style={$.cloneSectionHdr}>Nhân bản giọng</div>
-            <div style={$.cloneRow}>
-              <button
-                style={$.cloneBtn(cloning, recording)}
-                title={recording ? "Bấm để dừng ghi" : "Ghi âm giọng mẫu"}
-                disabled={cloning}
-                onClick={() => void toggleRecord()}
-              >
-                {recording ? "⏺ Đang ghi… (bấm để dừng)" : "🎤 Ghi âm"}
-              </button>
-              <button
-                style={$.cloneBtn(cloning || recording, false)}
-                title="Tải lên tệp âm thanh mẫu"
-                disabled={cloning || recording}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                📁 Tải lên
-              </button>
+            <div style={$.cloneHelper}>
+              Ghi từ micro → lưu thành một giọng trong thư viện bên trái, dùng lại được sau.
             </div>
-            <div style={$.cloneHint}>Ghi 3–5 giây giọng mẫu</div>
+
+            {recording ? (
+              <div style={$.recBar}>
+                <span style={$.recDot} className="bss-rec-dot" />
+                <span style={$.recLabel}>● Đang ghi… {fmtTime(recSeconds)}</span>
+                <div style={{ flex: 1 }} />
+                <button style={$.recStopBtn} onClick={() => void toggleRecord()}>
+                  ■ Dừng &amp; lưu
+                </button>
+              </div>
+            ) : (
+              <>
+                <div style={$.cloneRow}>
+                  <button
+                    style={$.cloneBtn(cloning, false)}
+                    title="Ghi âm giọng mẫu"
+                    disabled={cloning}
+                    onClick={() => void toggleRecord()}
+                  >
+                    🎤 Ghi âm
+                  </button>
+                  <button
+                    style={$.cloneBtn(cloning, false)}
+                    title="Tải lên tệp âm thanh mẫu"
+                    disabled={cloning}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    📁 Tải lên
+                  </button>
+                </div>
+                <div style={$.cloneHint}>Ghi 3–5 giây giọng mẫu</div>
+              </>
+            )}
+
+            {cloning && (
+              <div style={$.cloneHint}>Đang xử lý giọng mẫu…</div>
+            )}
+            {justSaved && (
+              <div style={$.savedNote}>✓ Đã lưu giọng “{justSaved.name}” vào thư viện</div>
+            )}
+
             <input
               ref={fileInputRef}
               type="file"
@@ -1062,7 +1202,7 @@ export function StudioPage() {
                     item={item}
                     selected={selectedItemId === item.id}
                     onSelect={() => setSelectedItemId(item.id)}
-                    onCancel={() => queue.cancel(item.id)}
+                    onCancel={() => void queue.remove(item.id)}
                     onSaveAs={() => saveAs(item)}
                     C={C}
                     MONO={MONO}
@@ -1094,15 +1234,19 @@ export function StudioPage() {
           <div>
             <div style={$.panelSectionHdr}>Sắc thái</div>
             <div style={$.moodGrid}>
-              {MOODS.map(([val, lbl]) => (
+              {MOODS.map(([key, lbl, em, temp]) => (
                 <button
-                  key={val}
-                  style={$.moodBtn(emotion === val)}
-                  onClick={() => setEmotion(val)}
+                  key={key}
+                  style={$.moodBtn(activeMood === key)}
+                  onClick={() => applyMood(em, temp)}
                 >
                   {lbl}
                 </button>
               ))}
+            </div>
+            <div style={$.moodNote}>
+              Với giọng có sẵn, cảm xúc rõ nhất khi chèn nhãn [cười]/[thở dài]… vào văn bản;
+              sắc thái chỉnh tông qua tham số.
             </div>
           </div>
 

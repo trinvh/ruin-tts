@@ -149,11 +149,20 @@ export function useQueue(outputDir: string, concurrency: number) {
     setItems((xs) => xs.filter((x) => x.status === "queued" || x.status === "running"));
   }, []);
 
+  /// Remove a single item from the list (the "X" button) — cancels the job first
+  /// if it's still queued/running, then drops it regardless of status.
+  const remove = useCallback(async (id: string) => {
+    const it = itemsRef.current.find((x) => x.id === id);
+    if (it?.status === "queued") pending.current = pending.current.filter((p) => p.id !== id);
+    if (it?.status === "running" && it.jobId) await cancelJob(it.jobId).catch(() => {});
+    setItems((xs) => xs.filter((x) => x.id !== id));
+  }, []);
+
   const stats = {
     queued: items.filter((x) => x.status === "queued").length,
     running: items.filter((x) => x.status === "running").length,
     done: items.filter((x) => x.status === "done").length,
   };
 
-  return { items, paused, setPaused, enqueue, cancel, cancelAll, clearFinished, stats };
+  return { items, paused, setPaused, enqueue, cancel, cancelAll, clearFinished, remove, stats };
 }
