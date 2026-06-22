@@ -673,8 +673,12 @@ async fn export_composited(
         .collect();
 
     let out = dir.join("export.mp4");
+    // `drawtext` (text/subtitle clips) needs libfreetype; skip text when the
+    // ffmpeg build lacks the filter so the export still renders (video+audio+
+    // images) instead of failing outright.
+    let text_ok = media::has_filter("drawtext").await;
     media::run_ffmpeg(&media::compose_export_args(
-        &clip_args, total_s, frame, &out,
+        &clip_args, total_s, frame, &out, text_ok,
     ))
     .await
     .context("dựng timeline (compositing)")?;

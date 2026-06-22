@@ -781,6 +781,7 @@ pub fn compose_export_args(
     total_s: f64,
     frame: (u32, u32),
     out: &Path,
+    text_ok: bool,
 ) -> Vec<String> {
     let (fw, fh) = frame;
     let total = total_s.max(0.1);
@@ -856,6 +857,11 @@ pub fn compose_export_args(
                 base = format!("vc{i}");
             }
             ClipKind::Text => {
+                // `drawtext` needs libfreetype; when absent we skip text clips so
+                // the rest of the export still renders.
+                if !text_ok {
+                    continue;
+                }
                 let Some(text) = c.text else { continue };
                 if text.trim().is_empty() {
                     continue;
@@ -906,7 +912,14 @@ pub fn compose_export_args(
         "[a]".to_string()
     };
 
-    let final_video = format!("[{base}]");
+    // If no video/image/text filter ran, `base` is still the raw input stream
+    // "0:v" (a stream specifier, mapped without brackets); otherwise it's a
+    // filtergraph label like "vc3" (mapped with brackets).
+    let final_video = if base == "0:v" {
+        "0:v".to_string()
+    } else {
+        format!("[{base}]")
+    };
     let fc = chains.join(";");
     args.extend([
         "-filter_complex".into(),
@@ -1405,7 +1418,7 @@ mod tests {
     #[test]
     fn compose_export_builds_black_base_and_bounds_length() {
         let clips: Vec<ClipArg> = vec![];
-        let a = compose_export_args(&clips, 12.0, (1920, 1080), &p("o.mp4"));
+        let a = compose_export_args(&clips, 12.0, (1920, 1080), &p("o.mp4"), true);
         let j = a.join(" ");
         // black base canvas as lavfi input 0
         assert!(j.contains("color=c=black:s=1920x1080:r=30:d=12.000"));
@@ -1435,7 +1448,7 @@ mod tests {
             opacity: 1.0,
             text: None,
         }];
-        let a = compose_export_args(&clips, 6.0, (1000, 600), &p("o.mp4"));
+        let a = compose_export_args(&clips, 6.0, (1000, 600), &p("o.mp4"), true);
         let j = a.join(" ");
         // video input is index 1 (base canvas is 0)
         assert!(
@@ -1465,7 +1478,7 @@ mod tests {
             opacity: 1.0,
             text: None,
         }];
-        let j = compose_export_args(&clips, 4.0, (1280, 720), &p("o.mp4")).join(" ");
+        let j = compose_export_args(&clips, 4.0, (1280, 720), &p("o.mp4"), true).join(" ");
         assert!(j.contains(
             "[1:a]atrim=start=0.000:duration=2.000,asetpts=PTS-STARTPTS,volume=0.800,adelay=1250:all=1[a0]"
         ));
@@ -1507,7 +1520,7 @@ mod tests {
                 text: Some("Xin chào: 100%"),
             },
         ];
-        let j = compose_export_args(&clips, 6.0, (1000, 1000), &p("o.mp4")).join(" ");
+        let j = compose_export_args(&clips, 6.0, (1000, 1000), &p("o.mp4"), true).join(" ");
         // image: scaled to fractional width, alpha from opacity, overlaid with gate
         assert!(j.contains("[1:v]scale=300:-1,format=rgba,colorchannelmixer=aa=0.500[im0]"));
         assert!(
@@ -1517,6 +1530,136 @@ mod tests {
         assert!(j.contains("drawtext=text='Xin chào\\: 100\\%'"));
         assert!(j.contains("enable='between(t,1.000,3.000)'[vc1]"));
         assert!(j.contains("-map [vc1]"));
+    }
+
+    /// End-to-end: the compositing export must actually produce a file on this
+    /// machine's ffmpeg (which lacks `drawtext`) — reproduces the "Đang xuất…
+    /// then nothing" bug. Skipped when ffmpeg isn't available.
+    #[tokio::test]
+    async fn compose_export_renders_end_to_end() {
+        if !has_filter("scale").await {
+            return; // no usable ffmpeg in this environment
+        }
+        let dir = std::env::temp_dir().join(format!("compose_it_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let vid = dir.join("src.mp4");
+        let out = dir.join("out.mp4");
+        let mk: Vec<String> = [
+            "-y",
+            "-f",
+            "lavfi",
+            "-t",
+            "1",
+            "-i",
+            "testsrc=s=160x120:r=30",
+            "-f",
+            "lavfi",
+            "-t",
+            "1",
+            "-i",
+            "sine=frequency=440",
+            "-shortest",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(vid.to_string_lossy().into_owned()))
+        .collect();
+        run_ffmpeg(&mk).await.expect("make test source");
+
+        let clips = vec![
+            ClipArg {
+                kind: ClipKind::Video,
+                source: Some(&vid),
+                start: 0.0,
+                dur: 1.0,
+                in_s: 0.0,
+                volume: 1.0,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                opacity: 1.0,
+                text: None,
+            },
+            ClipArg {
+                kind: ClipKind::Audio,
+                source: Some(&vid),
+                start: 0.0,
+                dur: 1.0,
+                in_s: 0.0,
+                volume: 1.0,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                opacity: 1.0,
+                text: None,
+            },
+            // a text/subtitle clip — must NOT break the render even without drawtext
+            ClipArg {
+                kind: ClipKind::Text,
+                source: None,
+                start: 0.0,
+                dur: 1.0,
+                in_s: 0.0,
+                volume: 1.0,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                opacity: 1.0,
+                text: Some("Xin chào"),
+            },
+        ];
+        let text_ok = has_filter("drawtext").await;
+        let args = compose_export_args(&clips, 1.0, (160, 120), &out, text_ok);
+        run_ffmpeg(&args)
+            .await
+            .expect("compositing export must succeed");
+        let len = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(len > 0, "export produced no output");
+    }
+
+    #[test]
+    fn compose_export_skips_text_when_drawtext_unavailable() {
+        let img = p("logo.png");
+        let clips = vec![
+            ClipArg {
+                kind: ClipKind::Image,
+                source: Some(&img),
+                start: 0.0,
+                dur: 5.0,
+                in_s: 0.0,
+                volume: 1.0,
+                x: 0.05,
+                y: 0.8,
+                w: 0.3,
+                opacity: 1.0,
+                text: None,
+            },
+            ClipArg {
+                kind: ClipKind::Text,
+                source: None,
+                start: 1.0,
+                dur: 2.0,
+                in_s: 0.0,
+                volume: 1.0,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                opacity: 1.0,
+                text: Some("Xin chào"),
+            },
+        ];
+        // drawtext available → the subtitle is drawn.
+        let with = compose_export_args(&clips, 6.0, (1000, 1000), &p("o.mp4"), true).join(" ");
+        assert!(with.contains("drawtext"));
+        // drawtext unavailable → the text clip is skipped so the export still
+        // renders (this build of ffmpeg lacks drawtext); the final map stays valid.
+        let without = compose_export_args(&clips, 6.0, (1000, 1000), &p("o.mp4"), false).join(" ");
+        assert!(
+            !without.contains("drawtext"),
+            "text clips must be skipped when drawtext is unavailable"
+        );
+        assert!(without.contains("-map [vc0]"));
     }
 
     #[test]
@@ -1551,7 +1694,7 @@ mod tests {
                 text: None,
             },
         ];
-        let j = compose_export_args(&clips, 10.0, (1920, 1080), &p("o.mp4")).join(" ");
+        let j = compose_export_args(&clips, 10.0, (1920, 1080), &p("o.mp4"), true).join(" ");
         // first video overlays onto the lavfi base, second overlays onto the result
         assert!(j.contains("[0:v][v0]overlay=W*0.0000:H*0.0000:"));
         assert!(j.contains("[vc0][v1]overlay=W*0.6000:H*0.6000:"));
