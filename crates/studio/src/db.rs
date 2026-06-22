@@ -49,6 +49,27 @@ fn row_to_dub_overlay(r: sqlx::sqlite::SqliteRow) -> crate::dub::DubOverlay {
     }
 }
 
+fn row_to_dub_clip(r: sqlx::sqlite::SqliteRow) -> crate::dub::DubClip {
+    crate::dub::DubClip {
+        id: r.get("id"),
+        project_id: r.get("project_id"),
+        track: r.get("track"),
+        kind: r.get("kind"),
+        source: r.get("source"),
+        start_s: r.get("start_s"),
+        dur_s: r.get("dur_s"),
+        in_s: r.get("in_s"),
+        volume: r.get("volume"),
+        x: r.get("x"),
+        y: r.get("y"),
+        w: r.get("w"),
+        opacity: r.get("opacity"),
+        text: r.get("text"),
+        text_style: r.get("text_style"),
+        origin: r.get("origin"),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Selection {
     pub slug: String,
@@ -896,6 +917,128 @@ impl Db {
             .execute(&self.pool)
             .await?;
         Ok(Some(file))
+    }
+
+    // ── Timeline clips ─────────────────────────────────────────────────────────
+    pub async fn list_dub_clips(&self, project_id: &str) -> Result<Vec<crate::dub::DubClip>> {
+        let rows = sqlx::query(
+            "SELECT id, project_id, track, kind, source, start_s, dur_s, in_s, volume, \
+             x, y, w, opacity, text, text_style, origin \
+             FROM dub_clips WHERE project_id = ? ORDER BY track, start_s",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(row_to_dub_clip).collect())
+    }
+
+    pub async fn get_dub_clip(&self, id: &str) -> Result<Option<crate::dub::DubClip>> {
+        let row = sqlx::query(
+            "SELECT id, project_id, track, kind, source, start_s, dur_s, in_s, volume, \
+             x, y, w, opacity, text, text_style, origin \
+             FROM dub_clips WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(row_to_dub_clip))
+    }
+
+    pub async fn create_dub_clip(&self, c: &crate::dub::DubClip) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO dub_clips (id, project_id, track, kind, source, start_s, dur_s, in_s, \
+             volume, x, y, w, opacity, text, text_style, origin) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&c.id)
+        .bind(&c.project_id)
+        .bind(c.track)
+        .bind(&c.kind)
+        .bind(&c.source)
+        .bind(c.start_s)
+        .bind(c.dur_s)
+        .bind(c.in_s)
+        .bind(c.volume)
+        .bind(c.x)
+        .bind(c.y)
+        .bind(c.w)
+        .bind(c.opacity)
+        .bind(&c.text)
+        .bind(&c.text_style)
+        .bind(&c.origin)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update timing/geometry/props of a clip. Returns false if it doesn't exist.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_dub_clip(
+        &self,
+        id: &str,
+        track: i64,
+        start_s: f64,
+        dur_s: f64,
+        in_s: f64,
+        volume: f64,
+        x: f64,
+        y: f64,
+        w: f64,
+        opacity: f64,
+        text: Option<&str>,
+        text_style: Option<&str>,
+    ) -> Result<bool> {
+        let r = sqlx::query(
+            "UPDATE dub_clips SET track = ?, start_s = ?, dur_s = ?, in_s = ?, volume = ?, \
+             x = ?, y = ?, w = ?, opacity = ?, text = ?, text_style = ? WHERE id = ?",
+        )
+        .bind(track)
+        .bind(start_s)
+        .bind(dur_s)
+        .bind(in_s)
+        .bind(volume)
+        .bind(x)
+        .bind(y)
+        .bind(w)
+        .bind(opacity)
+        .bind(text)
+        .bind(text_style)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    /// Delete a clip, returning its `source` path (so the caller can remove an
+    /// uploaded file). Returns None if the clip doesn't exist.
+    pub async fn delete_dub_clip(&self, id: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT source FROM dub_clips WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(r) = row else { return Ok(None) };
+        let source: Option<String> = r.get("source");
+        sqlx::query("DELETE FROM dub_clips WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(source)
+    }
+
+    /// Delete all clips for a project whose `origin` starts with `prefix` (e.g.
+    /// "dub:"). Used by compose to clear regenerated clips without touching
+    /// origin='user'.
+    pub async fn delete_dub_clips_by_origin_prefix(
+        &self,
+        project_id: &str,
+        prefix: &str,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM dub_clips WHERE project_id = ? AND origin LIKE ? || '%'")
+            .bind(project_id)
+            .bind(prefix)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn set_dub_segment_synth(

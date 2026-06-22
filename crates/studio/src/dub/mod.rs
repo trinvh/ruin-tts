@@ -9,6 +9,7 @@
 
 pub mod api;
 pub mod clients;
+pub mod compose;
 pub mod overlap;
 pub mod pipeline;
 
@@ -111,6 +112,31 @@ pub struct DubOverlay {
     pub y: f64,
     pub w: f64,
     pub opacity: f64,
+}
+
+/// One clip on the general timeline (Phase 0). Kinds: video/audio/image/text.
+/// `origin` records provenance so the compose step can regenerate `dub:*` clips
+/// without touching `origin='user'` ones. Geometry (`x`/`y`/`w`/`opacity`) is
+/// fractional (resolution-independent) like overlays; `text`/`text_style` only
+/// apply to text clips.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DubClip {
+    pub id: String,
+    pub project_id: String,
+    pub track: i64,
+    pub kind: String,
+    pub source: Option<String>,
+    pub start_s: f64,
+    pub dur_s: f64,
+    pub in_s: f64,
+    pub volume: f64,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub opacity: f64,
+    pub text: Option<String>,
+    pub text_style: Option<String>,
+    pub origin: String,
 }
 
 /// A detected speaker, its best-effort gender/age, and the assigned voice.

@@ -17,7 +17,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::dub::pipeline;
+use crate::dub::{compose, pipeline, DubClip};
 use crate::nodes::Services;
 use crate::server::{spawn_tracked, AppError, AppState};
 
@@ -52,6 +52,13 @@ pub fn routes() -> Router<AppState> {
             put(update_overlay).delete(delete_overlay),
         )
         .route("/api/dub/overlays/{oid}/image", get(serve_overlay_image))
+        .route(
+            "/api/dub/projects/{id}/clips",
+            get(list_clips).post(create_clip),
+        )
+        .route("/api/dub/projects/{id}/clips/compose", post(compose_clips))
+        .route("/api/dub/clips/{cid}", put(update_clip).delete(delete_clip))
+        .route("/api/dub/clips/{cid}/media", get(serve_clip_media))
 }
 
 /// Running-map key for a dubbing task (namespaced so it can't collide with run ids).
@@ -121,11 +128,13 @@ async fn get_project(
     let segments = st.services.db.get_dub_segments(&id).await?;
     let speakers = st.services.db.get_dub_speakers(&id).await?;
     let overlays = st.services.db.list_dub_overlays(&id).await?;
+    let clips = st.services.db.list_dub_clips(&id).await?;
     Ok(Json(json!({
         "project": project,
         "segments": segments,
         "speakers": speakers,
         "overlays": overlays,
+        "clips": clips,
     })))
 }
 
@@ -700,5 +709,253 @@ async fn serve_overlay_image(
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|_| AppError::not_found("không đọc được ảnh"))?;
+    Ok(([(header::CONTENT_TYPE, ct)], Bytes::from(bytes)).into_response())
+}
+
+// ── Timeline clips ──────────────────────────────────────────────────────────────
+
+/// Content-type for a clip's source file (images reuse `img_content_type`; video
+/// and audio extensions are mapped here). Defaults to octet-stream.
+fn clip_content_type(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("mp4") | Some("m4v") => "video/mp4",
+        Some("mov") => "video/quicktime",
+        Some("webm") => "video/webm",
+        Some("mkv") => "video/x-matroska",
+        Some("wav") => "audio/wav",
+        Some("mp3") => "audio/mpeg",
+        Some("m4a") | Some("aac") => "audio/mp4",
+        Some("ogg") | Some("opus") => "audio/ogg",
+        Some("flac") => "audio/flac",
+        Some("png") | Some("jpg") | Some("jpeg") | Some("gif") | Some("webp") => {
+            img_content_type(path)
+        }
+        _ => "application/octet-stream",
+    }
+}
+
+async fn list_clips(
+    State(st): State<AppState>,
+    AxPath(id): AxPath<String>,
+) -> Result<Json<Value>, AppError> {
+    if st.services.db.get_dub_project(&id).await?.is_none() {
+        return Err(AppError::not_found("không tìm thấy dự án"));
+    }
+    let clips = st.services.db.list_dub_clips(&id).await?;
+    Ok(Json(json!({ "clips": clips })))
+}
+
+/// Regenerate the `dub:*` clips from the current dub data, then return the list.
+async fn compose_clips(
+    State(st): State<AppState>,
+    AxPath(id): AxPath<String>,
+) -> Result<Json<Value>, AppError> {
+    if st.services.db.get_dub_project(&id).await?.is_none() {
+        return Err(AppError::not_found("không tìm thấy dự án"));
+    }
+    compose::compose_clips(&st.services, &id)
+        .await
+        .map_err(AppError::internal)?;
+    let clips = st.services.db.list_dub_clips(&id).await?;
+    Ok(Json(json!({ "clips": clips })))
+}
+
+/// Create a user clip (multipart: optional `file` + geometry/timing/text fields).
+/// When a file is present it is stored under `<work_dir>/dub/<project>/clips/
+/// <clipId>.<ext>` and becomes the clip's `source`.
+async fn create_clip(
+    State(st): State<AppState>,
+    AxPath(id): AxPath<String>,
+    mut mp: Multipart,
+) -> Result<Json<Value>, AppError> {
+    if st.services.db.get_dub_project(&id).await?.is_none() {
+        return Err(AppError::not_found("không tìm thấy dự án"));
+    }
+    let mut bytes: Option<Bytes> = None;
+    let mut ext = "bin".to_string();
+    let mut kind = "video".to_string();
+    let mut text: Option<String> = None;
+    let (mut track, mut start_s, mut dur_s) = (0.0_f64, 0.0_f64, 0.0_f64);
+    let (mut x, mut y, mut w, mut opacity, mut volume) = (0.0, 0.0, 1.0, 1.0, 1.0);
+    let field_f64 = |raw: String, slot: &mut f64| {
+        if let Ok(v) = raw.trim().parse::<f64>() {
+            *slot = v;
+        }
+    };
+    while let Some(field) = mp
+        .next_field()
+        .await
+        .map_err(|e| AppError::bad_request(format!("multipart lỗi: {e}")))?
+    {
+        match field.name().map(|s| s.to_string()).as_deref() {
+            Some("file") => {
+                if let Some(fname) = field.file_name() {
+                    if let Some(e) = Path::new(fname).extension().and_then(|e| e.to_str()) {
+                        ext = e.to_ascii_lowercase();
+                    }
+                }
+                bytes = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| AppError::bad_request(format!("đọc file: {e}")))?,
+                );
+            }
+            Some("kind") => kind = field.text().await.unwrap_or_default().trim().to_string(),
+            Some("text") => text = Some(field.text().await.unwrap_or_default()),
+            Some("track") => field_f64(field.text().await.unwrap_or_default(), &mut track),
+            Some("start_s") => field_f64(field.text().await.unwrap_or_default(), &mut start_s),
+            Some("dur_s") => field_f64(field.text().await.unwrap_or_default(), &mut dur_s),
+            Some("x") => field_f64(field.text().await.unwrap_or_default(), &mut x),
+            Some("y") => field_f64(field.text().await.unwrap_or_default(), &mut y),
+            Some("w") => field_f64(field.text().await.unwrap_or_default(), &mut w),
+            Some("opacity") => field_f64(field.text().await.unwrap_or_default(), &mut opacity),
+            Some("volume") => field_f64(field.text().await.unwrap_or_default(), &mut volume),
+            _ => {}
+        }
+    }
+    if kind.is_empty() {
+        kind = "video".to_string();
+    }
+
+    let cid = uuid::Uuid::new_v4().to_string();
+    let source = match bytes.filter(|b| !b.is_empty()) {
+        Some(b) => {
+            let dir = st.services.work_dir.join("dub").join(&id).join("clips");
+            tokio::fs::create_dir_all(&dir)
+                .await
+                .map_err(AppError::internal)?;
+            let path = dir.join(format!("{cid}.{ext}"));
+            tokio::fs::write(&path, &b)
+                .await
+                .map_err(AppError::internal)?;
+            Some(path.to_string_lossy().to_string())
+        }
+        None => None,
+    };
+
+    let c = DubClip {
+        id: cid,
+        project_id: id,
+        track: track as i64,
+        kind,
+        source,
+        start_s: start_s.max(0.0),
+        dur_s: dur_s.max(0.0),
+        in_s: 0.0,
+        volume: volume.clamp(0.0, 4.0),
+        x: x.clamp(0.0, 1.0),
+        y: y.clamp(0.0, 1.0),
+        w: w.clamp(0.0, 1.0),
+        opacity: opacity.clamp(0.0, 1.0),
+        text,
+        text_style: None,
+        origin: "user".to_string(),
+    };
+    st.services.db.create_dub_clip(&c).await?;
+    Ok(Json(json!({ "clip": c })))
+}
+
+#[derive(Deserialize)]
+struct UpdateClip {
+    track: i64,
+    start_s: f64,
+    dur_s: f64,
+    #[serde(default)]
+    in_s: f64,
+    #[serde(default = "default_one")]
+    volume: f64,
+    #[serde(default)]
+    x: f64,
+    #[serde(default)]
+    y: f64,
+    #[serde(default = "default_one")]
+    w: f64,
+    #[serde(default = "default_one")]
+    opacity: f64,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    text_style: Option<String>,
+}
+
+fn default_one() -> f64 {
+    1.0
+}
+
+async fn update_clip(
+    State(st): State<AppState>,
+    AxPath(cid): AxPath<String>,
+    Json(b): Json<UpdateClip>,
+) -> Result<Json<Value>, AppError> {
+    let found = st
+        .services
+        .db
+        .update_dub_clip(
+            &cid,
+            b.track,
+            b.start_s.max(0.0),
+            b.dur_s.max(0.0),
+            b.in_s.max(0.0),
+            b.volume.clamp(0.0, 4.0),
+            b.x.clamp(0.0, 1.0),
+            b.y.clamp(0.0, 1.0),
+            b.w.clamp(0.0, 1.0),
+            b.opacity.clamp(0.0, 1.0),
+            b.text.as_deref(),
+            b.text_style.as_deref(),
+        )
+        .await?;
+    if !found {
+        return Err(AppError::not_found("không tìm thấy clip"));
+    }
+    let clip = st.services.db.get_dub_clip(&cid).await?;
+    Ok(Json(json!({ "clip": clip })))
+}
+
+async fn delete_clip(
+    State(st): State<AppState>,
+    AxPath(cid): AxPath<String>,
+) -> Result<Json<Value>, AppError> {
+    // Only remove the backing file for user-uploaded clips (dub:* clips point at
+    // shared source media owned elsewhere).
+    let origin = st
+        .services
+        .db
+        .get_dub_clip(&cid)
+        .await?
+        .map(|c| c.origin)
+        .unwrap_or_default();
+    if let Some(source) = st.services.db.delete_dub_clip(&cid).await? {
+        if origin == "user" {
+            let _ = tokio::fs::remove_file(&source).await;
+        }
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn serve_clip_media(
+    State(st): State<AppState>,
+    AxPath(cid): AxPath<String>,
+) -> Result<Response, AppError> {
+    let clip = st
+        .services
+        .db
+        .get_dub_clip(&cid)
+        .await?
+        .ok_or_else(|| AppError::not_found("không tìm thấy clip"))?;
+    let source = clip
+        .source
+        .ok_or_else(|| AppError::not_found("clip không có file"))?;
+    let path = Path::new(&source);
+    let ct = clip_content_type(path);
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|_| AppError::not_found("không đọc được file"))?;
     Ok(([(header::CONTENT_TYPE, ct)], Bytes::from(bytes)).into_response())
 }

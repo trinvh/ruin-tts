@@ -61,7 +61,17 @@ export type DubOverlay = {
   start_s: number; end_s: number; x: number; y: number; w: number; opacity: number;
 };
 export type DubOverlayGeo = { start_s: number; end_s: number; x: number; y: number; w: number; opacity: number };
-export type DubDetail = { project: DubProject; segments: DubSegment[]; speakers: DubSpeaker[]; overlays: DubOverlay[] };
+export type DubClip = {
+  id: string; project_id: string; track: number; kind: string; source: string | null;
+  start_s: number; dur_s: number; in_s: number; volume: number;
+  x: number; y: number; w: number; opacity: number;
+  text: string | null; text_style: string | null; origin: string;
+};
+export type DubClipGeo = {
+  track: number; start_s: number; dur_s: number; in_s: number; volume: number;
+  x: number; y: number; w: number; opacity: number; text?: string | null; text_style?: string | null;
+};
+export type DubDetail = { project: DubProject; segments: DubSegment[]; speakers: DubSpeaker[]; overlays: DubOverlay[]; clips: DubClip[] };
 
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => "")}`);
@@ -194,6 +204,40 @@ export async function deleteOverlay(oid: string): Promise<void> {
 export async function overlayImageUrl(oid: string): Promise<string> {
   return `${await base()}/api/dub/overlays/${oid}/image`;
 }
+// ── Timeline clips ───────────────────────────────────────────────────────────
+export async function listClips(projectId: string): Promise<DubClip[]> {
+  const r = await j<{ clips: DubClip[] }>(await fetch(`${await base()}/api/dub/projects/${projectId}/clips`));
+  return r.clips;
+}
+export async function composeClips(projectId: string): Promise<DubClip[]> {
+  const r = await fetch(`${await base()}/api/dub/projects/${projectId}/clips/compose`, { method: "POST" });
+  return (await j<{ clips: DubClip[] }>(r)).clips;
+}
+export async function createClip(
+  projectId: string,
+  fields: Partial<Pick<DubClip, "kind" | "track" | "start_s" | "dur_s" | "x" | "y" | "w" | "opacity" | "volume" | "text">>,
+  file?: Blob,
+): Promise<DubClip> {
+  const fd = new FormData();
+  if (file) fd.append("file", file, (file as File).name || "clip");
+  for (const [k, v] of Object.entries(fields)) if (v !== undefined && v !== null) fd.append(k, String(v));
+  const r = await fetch(`${await base()}/api/dub/projects/${projectId}/clips`, { method: "POST", body: fd });
+  return (await j<{ clip: DubClip }>(r)).clip;
+}
+export async function updateClip(cid: string, geo: DubClipGeo): Promise<DubClip> {
+  const r = await fetch(`${await base()}/api/dub/clips/${cid}`, {
+    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(geo),
+  });
+  return (await j<{ clip: DubClip }>(r)).clip;
+}
+export async function deleteClip(cid: string): Promise<void> {
+  const r = await fetch(`${await base()}/api/dub/clips/${cid}`, { method: "DELETE" });
+  if (!r.ok) throw new Error(`${r.status}: ${await r.text().catch(() => "")}`);
+}
+export async function clipMediaUrl(cid: string): Promise<string> {
+  return `${await base()}/api/dub/clips/${cid}/media`;
+}
+
 export async function setDubVideoOffset(id: string, offset_s: number): Promise<void> {
   const r = await fetch(`${await base()}/api/dub/projects/${id}/video-offset`, {
     method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ offset_s }),
