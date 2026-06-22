@@ -3,7 +3,7 @@ import { C, FONT, MONO } from "../theme";
 import { Icon } from "../icons";
 import { HoverBox } from "../ui";
 import { dubStatus } from "../tabs";
-import { copyFile, desktopDir, saveAsDialog } from "../../platform";
+import { copyFile, desktopDir, saveAsDialog, showMessage } from "../../platform";
 import { ORDER, type DubProjectHook } from "./useDubProject";
 import type { EditorHistory } from "./useEditorHistory";
 
@@ -57,9 +57,18 @@ export function TopBar({ title, onTitle, onTitleCommit, snap, onToggleSnap, dub,
     const dest = await saveAsDialog(dflt);
     if (!dest) return;
     setSaveMsg("Đang lưu…");
-    const ok = await copyFile(exportPath, dest);
-    setSaveMsg(ok ? "Đã lưu ✓" : "Lưu thất bại");
-    setTimeout(() => setSaveMsg(""), 2500);
+    const err = await copyFile(exportPath, dest);
+    if (err) {
+      setSaveMsg("Lưu thất bại");
+      await showMessage(
+        `Không lưu được video.\n\nNguồn:\n${exportPath}\n\nĐích:\n${dest}\n\nLỗi: ${err}`,
+        "Lưu video thất bại",
+        "error",
+      );
+    } else {
+      setSaveMsg("Đã lưu ✓");
+    }
+    setTimeout(() => setSaveMsg(""), 3000);
   };
 
   return (

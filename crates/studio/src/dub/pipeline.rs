@@ -500,7 +500,13 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
         .context("xuất âm thanh tiếng Việt")?;
         services
             .db
-            .set_dub_field(project_id, "export_path", &out.to_string_lossy())
+            .set_dub_field(
+                project_id,
+                "export_path",
+                &std::fs::canonicalize(&out)
+                    .unwrap_or_else(|_| out.clone())
+                    .to_string_lossy(),
+            )
             .await?;
         return Ok(());
     }
@@ -608,7 +614,13 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
     .context("ghép video tiếng Việt")?;
     services
         .db
-        .set_dub_field(project_id, "export_path", &out.to_string_lossy())
+        .set_dub_field(
+            project_id,
+            "export_path",
+            &std::fs::canonicalize(&out)
+                .unwrap_or_else(|_| out.clone())
+                .to_string_lossy(),
+        )
         .await?;
     Ok(())
 }
@@ -684,7 +696,13 @@ async fn export_composited(
     .context("dựng timeline (compositing)")?;
     services
         .db
-        .set_dub_field(project_id, "export_path", &out.to_string_lossy())
+        .set_dub_field(
+            project_id,
+            "export_path",
+            &std::fs::canonicalize(&out)
+                .unwrap_or_else(|_| out.clone())
+                .to_string_lossy(),
+        )
         .await?;
     Ok(())
 }

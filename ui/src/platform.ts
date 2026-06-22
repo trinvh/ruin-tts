@@ -46,14 +46,26 @@ export async function mediaAiBase(): Promise<string | null> {
 }
 
 /// Copy a server-generated file to a destination on disk (Tauri only).
-export async function copyFile(src: string, dest: string): Promise<boolean> {
-  if (!isTauri()) return false;
+/** Copy a file. Returns null on success, or an error message string on failure. */
+export async function copyFile(src: string, dest: string): Promise<string | null> {
+  if (!isTauri()) return "không hỗ trợ ngoài ứng dụng";
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("copy_file", { src, dest });
-    return true;
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+/** Show a native message dialog (WKWebView lacks window.alert). */
+export async function showMessage(message: string, title = "Thông báo", kind: "info" | "error" = "info"): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    const { message: dlg } = await import("@tauri-apps/plugin-dialog");
+    await dlg(message, { title, kind });
   } catch {
-    return false;
+    /* ignore */
   }
 }
 

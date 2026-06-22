@@ -92,7 +92,7 @@ export function useQueue(outputDir: string, concurrency: number) {
           let savedPath: string | undefined;
           if (isTauri() && view.path && outRef.current) {
             const dest = joinPath(outRef.current, `${sub.fileBase}.${sub.params.format}`);
-            if (await copyFile(view.path, dest)) savedPath = dest;
+            if ((await copyFile(view.path, dest)) === null) savedPath = dest;
           }
           patch(id, {
             status: "done",
