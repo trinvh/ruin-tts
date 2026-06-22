@@ -184,7 +184,11 @@ export function useDubProject(id: string): DubProjectHook {
             cur = await getDubProject(id);
             setDetail(cur);
             if (cur.project.status === s.done) break;
-            if (cur.project.status === "failed") throw new Error(cur.project.error ?? "lỗi không rõ");
+            // On failure the backend reverts status to the step's `from` (not the
+            // literal "failed") and sets an error — detect that so auto-run stops
+            // instead of polling forever.
+            const errMsg = cur.project.error?.trim();
+            if (errMsg && !isBusy(cur.project.status)) throw new Error(errMsg);
           }
         }
       } catch (e) {

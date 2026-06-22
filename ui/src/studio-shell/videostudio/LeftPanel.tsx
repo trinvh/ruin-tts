@@ -1,5 +1,6 @@
 import { C, FONT, MONO } from "../theme";
 import { Icon } from "../icons";
+import { HoverBox } from "../ui";
 import { fmtBytes, fmtDuration } from "../../components/dubbing/shared";
 import { ORDER, STEPS, type DubProjectHook } from "./useDubProject";
 import type { StudioActions, StudioState } from "./useStudio";
@@ -185,6 +186,18 @@ interface StageCardProps {
   extra?: React.ReactNode;
 }
 
+/** Turn a raw backend/Gemini error into a short message + an optional hint, with
+ *  the raw text kept for the collapsible "Chi tiết". */
+function prettyError(raw: string): { msg: string; hint?: string; raw?: string } {
+  const trimmed = raw.trim();
+  const m = trimmed.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  const msg = m ? m[1].replace(/\\"/g, '"').replace(/\\n/g, " ").trim() : trimmed.split("\n")[0];
+  const hint = /UNAVAILABLE|overloaded|high demand|RESOURCE_EXHAUSTED|quota|rate.?limit|429|503/i.test(trimmed)
+    ? "Gemini đang quá tải hoặc hết hạn mức (key miễn phí). Đợi một lát rồi bấm Thử lại."
+    : undefined;
+  return { msg: msg || trimmed, hint, raw: msg !== trimmed ? trimmed : undefined };
+}
+
 function StageCard({ num, title, sub, done, running, locked, working, failed, error, runLabel, onRun, previewLines, voice, voiceOpts, onVoice, extra }: StageCardProps) {
   const cardBorder = failed ? "rgba(255,124,163,.45)" : done ? "rgba(80,209,170,.35)" : running ? "rgba(255,181,114,.4)" : C.borderSoft;
   const cardBg = failed ? "rgba(255,124,163,.06)" : running ? "rgba(255,181,114,.06)" : C.panel2;
@@ -205,11 +218,21 @@ function StageCard({ num, title, sub, done, running, locked, working, failed, er
         {locked && <Icon name="lock" size={14} stroke={1.8} color={C.muted5} />}
       </div>
 
-      {failed && error && (
-        <div style={{ marginTop: 10, border: "1px solid rgba(255,124,163,.3)", background: "rgba(255,124,163,.1)", color: C.pink, borderRadius: 7, padding: "7px 9px", fontSize: 11, lineHeight: 1.45, maxHeight: 96, overflow: "auto", whiteSpace: "pre-wrap" }}>
-          {error}
-        </div>
-      )}
+      {failed && error && (() => {
+        const e = prettyError(error);
+        return (
+          <div style={{ marginTop: 10, border: "1px solid rgba(255,124,163,.3)", background: "rgba(255,124,163,.1)", color: C.pink, borderRadius: 7, padding: "8px 10px", fontSize: 11.5, lineHeight: 1.45 }}>
+            <div style={{ fontWeight: 600 }}>{e.msg}</div>
+            {e.hint && <div style={{ marginTop: 5, color: C.orange, fontSize: 11 }}>{e.hint}</div>}
+            {e.raw && (
+              <details style={{ marginTop: 6 }}>
+                <summary style={{ cursor: "pointer", fontSize: 10.5, opacity: 0.7 }}>Chi tiết kỹ thuật</summary>
+                <div style={{ marginTop: 5, maxHeight: 90, overflow: "auto", whiteSpace: "pre-wrap", fontSize: 10, opacity: 0.85, fontFamily: MONO }}>{e.raw}</div>
+              </details>
+            )}
+          </div>
+        );
+      })()}
 
       {voice !== undefined && (
         <div style={{ position: "relative", marginTop: 11 }}>
@@ -241,22 +264,36 @@ function StageCard({ num, title, sub, done, running, locked, working, failed, er
 
       {!locked && (
         <div style={{ marginTop: 11 }}>
-          <button
+          <HoverBox
+            as="button"
             onClick={runDisabled ? undefined : onRun}
             title={done && !failed ? "Chạy lại bước này (ghi đè kết quả cũ)" : undefined}
             style={{
               width: "100%", height: 32, borderRadius: 7, fontFamily: FONT, fontSize: 12.5, fontWeight: 600,
               display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
               cursor: runDisabled ? "default" : "pointer",
+              transition: "transform .08s, background .12s, filter .12s",
               border: `1px solid ${
                 running ? "rgba(255,181,114,.4)" : failed ? "rgba(255,124,163,.5)" : done ? C.borderInset2 : "rgba(146,136,224,.45)"
               }`,
               background: running ? "rgba(255,181,114,.12)" : failed ? "rgba(255,124,163,.14)" : done ? "transparent" : "rgba(146,136,224,.14)",
               color: running ? C.orange : failed ? C.pink : done ? C.muted3 : C.purpleLt,
             }}
+            hoverStyle={runDisabled ? undefined : { background: failed ? "rgba(255,124,163,.24)" : done ? "rgba(146,136,224,.1)" : "rgba(146,136,224,.24)", filter: "brightness(1.08)" }}
+            activeStyle={runDisabled ? undefined : { transform: "scale(.97)", filter: "brightness(.95)" }}
           >
-            {running ? "Đang xử lý…" : runLabel}
-          </button>
+            {running ? (
+              <>
+                <span style={{ width: 12, height: 12, border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "bss-spin .7s linear infinite" }} />
+                Đang xử lý…
+              </>
+            ) : (
+              <>
+                {failed && <Icon name="undo" size={13} stroke={2} />}
+                {runLabel}
+              </>
+            )}
+          </HoverBox>
         </div>
       )}
     </div>
