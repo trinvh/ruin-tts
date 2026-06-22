@@ -290,6 +290,10 @@ where
     spawn_tracked(st.running.clone(), dub_key(&id), async move {
         match f(services.clone(), rid.clone()).await {
             Ok(_) => {
+                // Refresh the timeline clips from the new dub state (re-running a
+                // step — e.g. re-translate or re-synthesize — must update the
+                // generated clips; user clips are preserved).
+                let _ = crate::dub::compose::compose_clips(&services, &rid).await;
                 let _ = services.db.set_dub_status(&rid, &done, None).await;
             }
             Err(e) => {
