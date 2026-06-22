@@ -6,6 +6,15 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VoiceClone {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    /// Absolute path to the WAV file on disk.
+    pub file: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Selection {
     pub slug: String,
@@ -749,6 +758,74 @@ impl Db {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    // ── Voice clones ──────────────────────────────────────────────────────────
+    pub async fn insert_voice_clone(&self, id: &str, name: &str, file: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO voice_clones (id, name, file, created_at) VALUES (?, ?, ?, datetime('now'))",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(file)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_voice_clones(&self) -> Result<Vec<VoiceClone>> {
+        let rows = sqlx::query(
+            "SELECT id, name, created_at, file FROM voice_clones ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| VoiceClone {
+                id: r.get("id"),
+                name: r.get("name"),
+                created_at: r.get("created_at"),
+                file: r.get("file"),
+            })
+            .collect())
+    }
+
+    pub async fn get_voice_clone(&self, id: &str) -> Result<Option<VoiceClone>> {
+        let row = sqlx::query("SELECT id, name, created_at, file FROM voice_clones WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| VoiceClone {
+            id: r.get("id"),
+            name: r.get("name"),
+            created_at: r.get("created_at"),
+            file: r.get("file"),
+        }))
+    }
+
+    pub async fn rename_voice_clone(&self, id: &str, name: &str) -> Result<bool> {
+        let result = sqlx::query("UPDATE voice_clones SET name = ? WHERE id = ?")
+            .bind(name)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn delete_voice_clone(&self, id: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT file FROM voice_clones WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(r) = row else {
+            return Ok(None);
+        };
+        let file: String = r.get("file");
+        sqlx::query("DELETE FROM voice_clones WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(Some(file))
     }
 
     pub async fn get_run(&self, id: &str) -> Result<Option<serde_json::Value>> {

@@ -73,6 +73,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/runs/{id}/cancel", post(cancel_run))
         .route("/api/file", get(serve_file))
         .merge(crate::dub::api::routes())
+        .merge(crate::clones::api::routes())
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

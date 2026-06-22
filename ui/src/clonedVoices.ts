@@ -1,91 +1,57 @@
-// Persisted voice clones. The vieneu server keeps clones in memory (lost on
-// restart), so we persist the *reference sample* on the client and re-`/v1/clone`
-// it to obtain a fresh `ref_id` whenever one is needed in a session.
+// Cloned voices are persisted ON DISK by studio-server (`/api/clones`, WAV files
+// + SQLite). The vieneu TTS server keeps its encoded clone in memory (lost on
+// restart), so for synthesis we lazily fetch the stored sample from studio and
+// re-`/v1/clone` it to obtain a fresh `ref_id` per session.
 
 import { cloneVoice } from "./api";
+import {
+  cloneSampleUrl,
+  createClone,
+  deleteClone as apiDeleteClone,
+  listClones,
+  renameClone as apiRenameClone,
+  type VoiceClone,
+} from "./studioApi";
 
-export type ClonedVoice = {
-  id: string;
-  name: string;
-  createdAt: number;
-  /** base64 of the recorded/uploaded reference clip (audio/webm or wav). */
-  sampleB64: string;
-  mime: string;
-};
+export type ClonedVoice = VoiceClone; // { id, name, created_at }
 
-const KEY = "beesoft_cloned_voices";
-// Session cache: cloned-voice id → server ref_id (valid until the server restarts
-// or the page reloads). Re-obtained lazily via ensureRefId().
+// Session cache: clone id → vieneu ref_id (valid until vieneu restarts / reload).
 const refCache = new Map<string, string>();
 
-export function loadClones(): ClonedVoice[] {
+export function loadClones(): Promise<ClonedVoice[]> {
+  return listClones();
+}
+
+/** Persist a recorded/uploaded WAV sample as a named clone (on disk via studio),
+ *  and pre-register it with vieneu so the ref_id is ready this session. */
+export async function addClone(name: string, wav: Blob): Promise<ClonedVoice> {
+  const cv = await createClone(name.trim() || "Giọng của bạn", wav);
   try {
-    const raw = localStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as ClonedVoice[]) : [];
+    const { ref_id } = await cloneVoice(wav, "ref.wav");
+    refCache.set(cv.id, ref_id);
   } catch {
-    return [];
+    /* ensureRefId will retry from the stored sample */
   }
+  return cv;
 }
 
-function saveAll(list: ClonedVoice[]) {
-  localStorage.setItem(KEY, JSON.stringify(list));
+export async function renameClone(id: string, name: string): Promise<ClonedVoice> {
+  return apiRenameClone(id, name.trim() || "Giọng của bạn");
 }
 
-async function blobToB64(blob: Blob): Promise<string> {
-  const buf = new Uint8Array(await blob.arrayBuffer());
-  let bin = "";
-  for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
-  return btoa(bin);
-}
-
-function b64ToBlob(b64: string, mime: string): Blob {
-  const bin = atob(b64);
-  const arr = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-  return new Blob([arr], { type: mime });
-}
-
-/** Persist a recorded/uploaded sample as a named clone, and clone it now so the
- *  ref_id is ready this session. Returns the new list. */
-export async function addClone(name: string, blob: Blob): Promise<ClonedVoice[]> {
-  const id = "clone_" + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
-  const cv: ClonedVoice = {
-    id,
-    name: name.trim() || "Giọng của bạn",
-    createdAt: Date.now(),
-    sampleB64: await blobToB64(blob),
-    mime: blob.type || "audio/webm",
-  };
-  const list = [...loadClones(), cv];
-  saveAll(list);
-  // Best-effort: register with the server right away (ignore failure — ensureRefId
-  // retries later).
-  try {
-    const ext = cv.mime.includes("wav") ? "wav" : "webm";
-    const { ref_id } = await cloneVoice(blob, `ref.${ext}`);
-    refCache.set(id, ref_id);
-  } catch {
-    /* will retry in ensureRefId */
-  }
-  return list;
-}
-
-export function removeClone(id: string): ClonedVoice[] {
+export async function removeClone(id: string): Promise<void> {
   refCache.delete(id);
-  const list = loadClones().filter((c) => c.id !== id);
-  saveAll(list);
-  return list;
+  await apiDeleteClone(id);
 }
 
-/** Ensure a valid server `ref_id` for a clone, re-`/v1/clone`-ing the stored
- *  sample if we don't have one cached this session. Throws if the server is
- *  unreachable. */
+/** A valid vieneu `ref_id` for a clone — re-uploads the stored sample (fetched
+ *  from studio) if we don't have one cached this session. */
 export async function ensureRefId(cv: ClonedVoice): Promise<string> {
   const cached = refCache.get(cv.id);
   if (cached) return cached;
-  const blob = b64ToBlob(cv.sampleB64, cv.mime);
-  const ext = cv.mime.includes("wav") ? "wav" : "webm";
-  const { ref_id } = await cloneVoice(blob, `ref.${ext}`);
+  const sample = await fetch(await cloneSampleUrl(cv.id));
+  if (!sample.ok) throw new Error(`tải mẫu giọng: ${sample.status}`);
+  const { ref_id } = await cloneVoice(await sample.blob(), "ref.wav");
   refCache.set(cv.id, ref_id);
   return ref_id;
 }

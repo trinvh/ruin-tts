@@ -155,6 +155,36 @@ export async function putConfig(cfg: AppConfig): Promise<void> {
   if (!r.ok) throw new Error(`${r.status}: ${await r.text().catch(() => "")}`);
 }
 
+// ── Voice clones (persisted on disk by studio-server) ───────────────────────
+export type VoiceClone = { id: string; name: string; created_at: string };
+
+export async function listClones(): Promise<VoiceClone[]> {
+  const r = await j<{ clones: VoiceClone[] }>(await fetch(`${await base()}/api/clones`));
+  return r.clones;
+}
+export async function createClone(name: string, file: Blob): Promise<VoiceClone> {
+  const fd = new FormData();
+  fd.append("name", name);
+  fd.append("file", file, "ref.wav");
+  return j(await fetch(`${await base()}/api/clones`, { method: "POST", body: fd }));
+}
+export async function renameClone(id: string, name: string): Promise<VoiceClone> {
+  return j(
+    await fetch(`${await base()}/api/clones/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+  );
+}
+export async function deleteClone(id: string): Promise<void> {
+  const r = await fetch(`${await base()}/api/clones/${id}`, { method: "DELETE" });
+  if (!r.ok) throw new Error(`${r.status}: ${await r.text().catch(() => "")}`);
+}
+export async function cloneSampleUrl(id: string): Promise<string> {
+  return `${await base()}/api/clones/${id}/sample`;
+}
+
 // ── Video dubbing API ───────────────────────────────────────────────────────
 export async function listDubProjects(): Promise<DubProject[]> {
   const r = await j<{ projects: DubProject[] }>(await fetch(`${await base()}/api/dub/projects`));

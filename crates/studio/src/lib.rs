@@ -5,6 +5,7 @@
 //! an operator-defined node graph (n8n-style). This crate owns its DB, queue,
 //! and state; Ruin is read-only.
 
+pub mod clones;
 pub mod config;
 pub mod db;
 pub mod dub;

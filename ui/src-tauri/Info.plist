@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Required so WKWebView's getUserMedia can request the mic (voice cloning). -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Beesoft Studio cần micro để ghi mẫu giọng cho tính năng nhân bản giọng.</string>
+</dict>
+</plist>

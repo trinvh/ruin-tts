@@ -8,6 +8,7 @@ import {
   ensureRefId,
   loadClones,
   removeClone,
+  renameClone,
   type ClonedVoice,
 } from "../clonedVoices";
 import { toWav } from "../wav";
@@ -90,12 +91,20 @@ export function StudioPage() {
   const [volume, setVolume] = useState(1);
 
   // Voice cloning + preview state
-  const [clones, setClones] = useState<ClonedVoice[]>(() => loadClones());
+  const [clones, setClones] = useState<ClonedVoice[]>([]);
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [cloning, setCloning] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
-  const [justSaved, setJustSaved] = useState<{ id: string; name: string } | null>(null);
+  // Pending sample awaiting an in-app name (no prompt() in the WKWebview).
+  const [pendingClone, setPendingClone] = useState<{ blob: Blob; name: string } | null>(null);
+  // Inline status/confirmation line for the clone section (no alert()).
+  const [cloneMsg, setCloneMsg] = useState<{ text: string; err: boolean } | null>(null);
+  const [justSavedId, setJustSavedId] = useState<string | null>(null);
+  // Which clone row is currently being renamed inline, and its draft text.
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -103,7 +112,22 @@ export function StudioPage() {
   const mediaRecRef = useRef<MediaRecorder | null>(null);
   const recChunksRef = useRef<Blob[]>([]);
   const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showCloneMsg = useCallback((text: string, err: boolean) => {
+    setCloneMsg({ text, err });
+    if (msgTimerRef.current) clearTimeout(msgTimerRef.current);
+    msgTimerRef.current = setTimeout(() => setCloneMsg(null), 5000);
+  }, []);
+
+  const reloadClones = useCallback(async () => {
+    try {
+      setClones(await loadClones());
+    } catch {
+      /* keep last-known list */
+    }
+  }, []);
 
   const queue = useQueue(outputDir, concurrency);
 
@@ -158,11 +182,17 @@ export function StudioPage() {
     };
   }, []);
 
+  // Load cloned voices from studio-server on mount.
+  useEffect(() => {
+    void reloadClones();
+  }, [reloadClones]);
+
   // Clean up recording / confirmation timers on unmount.
   useEffect(() => {
     return () => {
       if (recTimerRef.current) clearInterval(recTimerRef.current);
-      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      if (msgTimerRef.current) clearTimeout(msgTimerRef.current);
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
     };
   }, []);
 
@@ -237,9 +267,12 @@ export function StudioPage() {
       }
       queue.enqueue(buildSubmit(params, voiceLabel));
     } catch (e) {
-      alert("Không tạo được ref giọng nhân bản: " + (e instanceof Error ? e.message : String(e)));
+      showCloneMsg(
+        "Không tạo được ref giọng nhân bản: " + (e instanceof Error ? e.message : String(e)),
+        true,
+      );
     }
-  }, [text, voice, selectedClone, emotion, temperature, topK, topP, repPen, format, voiceLabel, queue]);
+  }, [text, voice, selectedClone, emotion, temperature, topK, topP, repPen, format, voiceLabel, queue, showCloneMsg]);
 
   const saveAs = useCallback(async (it: QueueItem) => {
     const fname = `beesoft.${it.format}`;
@@ -283,37 +316,41 @@ export function StudioPage() {
         a.onended = () => URL.revokeObjectURL(url);
         await a.play();
       } catch (e) {
-        alert("Không nghe thử được giọng: " + (e instanceof Error ? e.message : String(e)));
+        showCloneMsg(
+          "Không nghe thử được giọng: " + (e instanceof Error ? e.message : String(e)),
+          true,
+        );
       } finally {
         setPreviewing(null);
       }
     },
-    [status, previewing, emotion, temperature, topK, topP, repPen],
+    [status, previewing, emotion, temperature, topK, topP, repPen, showCloneMsg],
   );
 
-  // ── Add a clone (shared by record + upload) ────────────────────────────────
-  const commitClone = useCallback(async (wav: Blob, defaultName: string) => {
-    const name = prompt("Tên giọng nhân bản:", defaultName);
-    if (!name) return;
+  // ── Save the pending sample under the in-app name (no prompt()) ─────────────
+  const savePendingClone = useCallback(async () => {
+    if (!pendingClone || saving) return;
+    setSaving(true);
     setCloning(true);
     try {
-      const before = loadClones().map((c) => c.id);
-      const next = await addClone(name, wav);
-      setClones(next);
-      // Identify the newly added clone, select it, and flash a confirmation.
-      const added = next.find((c) => !before.includes(c.id)) ?? next[next.length - 1];
-      if (added) {
-        setVoice(added.id);
-        setJustSaved({ id: added.id, name: added.name });
-        if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
-        savedTimerRef.current = setTimeout(() => setJustSaved(null), 4000);
-      }
+      const added = await addClone(pendingClone.name, pendingClone.blob);
+      setPendingClone(null);
+      await reloadClones();
+      setVoice(added.id);
+      setJustSavedId(added.id);
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = setTimeout(() => setJustSavedId(null), 2400);
+      showCloneMsg(`✓ Đã lưu giọng “${added.name}” vào thư viện`, false);
     } catch (e) {
-      alert("Không nhân bản được giọng: " + (e instanceof Error ? e.message : String(e)));
+      showCloneMsg(
+        "Không nhân bản được giọng: " + (e instanceof Error ? e.message : String(e)),
+        true,
+      );
     } finally {
       setCloning(false);
+      setSaving(false);
     }
-  }, []);
+  }, [pendingClone, saving, reloadClones, showCloneMsg]);
 
   // ── Mic recording ──────────────────────────────────────────────────────────
   const toggleRecord = useCallback(async () => {
@@ -338,9 +375,12 @@ export function StudioPage() {
         const raw = new Blob(recChunksRef.current, { type: mr.mimeType || "audio/webm" });
         try {
           const wav = await toWav(raw);
-          await commitClone(wav, "Giọng của tôi");
+          setPendingClone({ blob: wav, name: "Giọng của tôi" });
         } catch (e) {
-          alert("Không xử lý được bản ghi: " + (e instanceof Error ? e.message : String(e)));
+          showCloneMsg(
+            "Không xử lý được bản ghi: " + (e instanceof Error ? e.message : String(e)),
+            true,
+          );
         }
       };
       mediaRecRef.current = mr;
@@ -349,14 +389,10 @@ export function StudioPage() {
       setRecSeconds(0);
       if (recTimerRef.current) clearInterval(recTimerRef.current);
       recTimerRef.current = setInterval(() => setRecSeconds((s) => s + 1), 1000);
-    } catch (e) {
-      alert(
-        "Không truy cập được micro — cấp quyền micro cho ứng dụng rồi thử lại. (" +
-          (e instanceof Error ? e.message : String(e)) +
-          ")",
-      );
+    } catch {
+      showCloneMsg("Không truy cập được micro — cấp quyền micro cho ứng dụng rồi thử lại.", true);
     }
-  }, [recording, commitClone]);
+  }, [recording, showCloneMsg]);
 
   // ── File upload ────────────────────────────────────────────────────────────
   const onUploadFile = useCallback(
@@ -366,21 +402,49 @@ export function StudioPage() {
       if (!f) return;
       try {
         const wav = await toWav(f);
-        await commitClone(wav, f.name.replace(/\.[^.]+$/, ""));
+        setPendingClone({ blob: wav, name: f.name.replace(/\.[^.]+$/, "") });
       } catch (err) {
-        alert("Không đọc được tệp âm thanh: " + (err instanceof Error ? err.message : String(err)));
+        showCloneMsg(
+          "Không đọc được tệp âm thanh: " + (err instanceof Error ? err.message : String(err)),
+          true,
+        );
       }
     },
-    [commitClone],
+    [showCloneMsg],
   );
 
-  const deleteClone = useCallback(
-    (cv: ClonedVoice) => {
-      const next = removeClone(cv.id);
-      setClones(next);
-      if (voice === cv.id) setVoice(voices[0]?.id ?? "");
+  const deleteCloneRow = useCallback(
+    async (cv: ClonedVoice) => {
+      try {
+        await removeClone(cv.id);
+        if (voice === cv.id) setVoice(voices[0]?.id ?? "");
+        await reloadClones();
+      } catch (e) {
+        showCloneMsg(
+          "Không xoá được giọng: " + (e instanceof Error ? e.message : String(e)),
+          true,
+        );
+      }
     },
-    [voice, voices],
+    [voice, voices, reloadClones, showCloneMsg],
+  );
+
+  const commitRename = useCallback(
+    async (cv: ClonedVoice) => {
+      const name = renameDraft.trim();
+      setRenamingId(null);
+      if (!name || name === cv.name) return;
+      try {
+        await renameClone(cv.id, name);
+        await reloadClones();
+      } catch (e) {
+        showCloneMsg(
+          "Không đổi tên được giọng: " + (e instanceof Error ? e.message : String(e)),
+          true,
+        );
+      }
+    },
+    [renameDraft, reloadClones, showCloneMsg],
   );
 
   const togglePlayPause = () => {
@@ -656,6 +720,74 @@ export function StudioPage() {
       fontSize: 11,
       fontWeight: 600,
       color: C.teal,
+    },
+    cloneMsgErr: {
+      marginTop: 8,
+      fontSize: 11,
+      fontWeight: 600,
+      color: C.coral,
+      lineHeight: 1.4,
+    },
+    renameInput: {
+      width: "100%",
+      padding: "4px 6px",
+      background: C.inset,
+      border: `1px solid ${C.purple}`,
+      borderRadius: 6,
+      color: "#fff",
+      fontSize: 13,
+      outline: "none",
+      boxSizing: "border-box" as const,
+      fontFamily: FONT,
+    },
+    nameForm: {
+      padding: "8px",
+      borderRadius: 8,
+      border: `1px solid ${C.purple}`,
+      background: "rgba(146,136,224,.1)",
+    },
+    nameFormLabel: {
+      fontSize: 11,
+      color: C.purpleLt,
+      marginBottom: 6,
+    },
+    nameFormInput: {
+      width: "100%",
+      padding: "6px 8px",
+      background: C.inset,
+      border: `1px solid ${C.border}`,
+      borderRadius: 6,
+      color: "#fff",
+      fontSize: 13,
+      outline: "none",
+      boxSizing: "border-box" as const,
+      fontFamily: FONT,
+    },
+    nameFormBtns: {
+      display: "flex",
+      gap: 6,
+      marginTop: 8,
+    },
+    nameFormSave: (disabled: boolean) => ({
+      flex: 1,
+      padding: "6px 0",
+      background: disabled ? C.panel3 : C.purple,
+      border: "none",
+      borderRadius: 6,
+      color: disabled ? C.muted3 : "#fff",
+      fontSize: 12,
+      fontWeight: 600,
+      cursor: disabled ? "not-allowed" : "pointer",
+    }),
+    nameFormCancel: {
+      flex: 1,
+      padding: "6px 0",
+      background: C.panel2,
+      border: `1px solid ${C.border}`,
+      borderRadius: 6,
+      color: C.muted,
+      fontSize: 12,
+      cursor: "pointer",
     },
 
     // CENTER PANEL
@@ -1034,40 +1166,75 @@ export function StudioPage() {
                 <div
                   key={cv.id}
                   style={$.voiceRow(selected)}
-                  className={justSaved?.id === cv.id ? "bss-flash" : undefined}
-                  onClick={() => setVoice(cv.id)}
+                  className={justSavedId === cv.id ? "bss-flash" : undefined}
+                  onClick={() => renamingId !== cv.id && setVoice(cv.id)}
                   role="button"
                   tabIndex={0}
-                  onKeyDown={(e) => e.key === "Enter" && setVoice(cv.id)}
+                  onKeyDown={(e) => e.key === "Enter" && renamingId !== cv.id && setVoice(cv.id)}
                 >
                   <div style={$.voiceAvatar(0)}>{cv.name.charAt(0).toUpperCase()}</div>
                   <div style={$.voiceName}>
-                    <div style={$.voiceNameText}>{cv.name}</div>
-                    <div style={$.cloneBadge}>đã nhân bản</div>
+                    {renamingId === cv.id ? (
+                      <input
+                        autoFocus
+                        style={$.renameInput}
+                        value={renameDraft}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onBlur={() => void commitRename(cv)}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === "Enter") void commitRename(cv);
+                          else if (e.key === "Escape") setRenamingId(null);
+                        }}
+                      />
+                    ) : (
+                      <>
+                        <div style={$.voiceNameText}>{cv.name}</div>
+                        <div style={$.cloneBadge}>đã nhân bản</div>
+                      </>
+                    )}
                   </div>
-                  <button
-                    style={$.voicePreviewBtn(previewEnabled, isPreviewing)}
-                    title={status === "ready" ? "Nghe thử giọng" : "Máy chủ chưa sẵn sàng"}
-                    disabled={!previewEnabled}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void preview({ clone: cv });
-                    }}
-                  >
-                    {isPreviewing ? "⟳" : "▶"}
-                  </button>
-                  <button
-                    style={$.cloneDeleteBtn}
-                    title="Xóa giọng nhân bản"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteClone(cv);
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.color = C.coral; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.color = C.muted3; }}
-                  >
-                    🗑
-                  </button>
+                  {renamingId !== cv.id && (
+                    <>
+                      <button
+                        style={$.voicePreviewBtn(previewEnabled, isPreviewing)}
+                        title={status === "ready" ? "Nghe thử giọng" : "Máy chủ chưa sẵn sàng"}
+                        disabled={!previewEnabled}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void preview({ clone: cv });
+                        }}
+                      >
+                        {isPreviewing ? "⟳" : "▶"}
+                      </button>
+                      <button
+                        style={$.cloneDeleteBtn}
+                        title="Đổi tên giọng"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRenameDraft(cv.name);
+                          setRenamingId(cv.id);
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = C.purpleLt; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = C.muted3; }}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        style={$.cloneDeleteBtn}
+                        title="Xóa giọng nhân bản"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void deleteCloneRow(cv);
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = C.coral; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = C.muted3; }}
+                      >
+                        🗑
+                      </button>
+                    </>
+                  )}
                 </div>
               );
             })}
@@ -1085,7 +1252,41 @@ export function StudioPage() {
               Ghi từ micro → lưu thành một giọng trong thư viện bên trái, dùng lại được sau.
             </div>
 
-            {recording ? (
+            {pendingClone ? (
+              <div style={$.nameForm}>
+                <div style={$.nameFormLabel}>Đặt tên cho giọng mẫu:</div>
+                <input
+                  autoFocus
+                  style={$.nameFormInput}
+                  value={pendingClone.name}
+                  placeholder="Tên giọng…"
+                  disabled={saving}
+                  onChange={(e) =>
+                    setPendingClone((p) => (p ? { ...p, name: e.target.value } : p))
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void savePendingClone();
+                    else if (e.key === "Escape") setPendingClone(null);
+                  }}
+                />
+                <div style={$.nameFormBtns}>
+                  <button
+                    style={$.nameFormSave(saving || !pendingClone.name.trim())}
+                    disabled={saving || !pendingClone.name.trim()}
+                    onClick={() => void savePendingClone()}
+                  >
+                    {saving ? "Đang lưu…" : "Lưu"}
+                  </button>
+                  <button
+                    style={$.nameFormCancel}
+                    disabled={saving}
+                    onClick={() => setPendingClone(null)}
+                  >
+                    Huỷ
+                  </button>
+                </div>
+              </div>
+            ) : recording ? (
               <div style={$.recBar}>
                 <span style={$.recDot} className="bss-rec-dot" />
                 <span style={$.recLabel}>● Đang ghi… {fmtTime(recSeconds)}</span>
@@ -1118,11 +1319,8 @@ export function StudioPage() {
               </>
             )}
 
-            {cloning && (
-              <div style={$.cloneHint}>Đang xử lý giọng mẫu…</div>
-            )}
-            {justSaved && (
-              <div style={$.savedNote}>✓ Đã lưu giọng “{justSaved.name}” vào thư viện</div>
+            {cloneMsg && (
+              <div style={cloneMsg.err ? $.cloneMsgErr : $.savedNote}>{cloneMsg.text}</div>
             )}
 
             <input
