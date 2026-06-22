@@ -71,6 +71,16 @@ export function Inspector({ state, actions, dub, transport, trackCtl }: Props) {
     const seg = dub.detail?.segments.find((s) => s.id === subSegId);
     void dub.setSegment(subSegId, text, seg?.voice ?? null);
   };
+  // Persist a property change of a selected USER clip (volume/opacity).
+  const isUserClip = selClip?.origin === "user";
+  const commitClip = (patch: { volume?: number; opacity?: number }) => {
+    if (!selClip || selClip.origin !== "user") return;
+    void dub.patchClip(selClip.id, {
+      track: selClip.track, start_s: selClip.start_s, dur_s: selClip.dur_s, in_s: selClip.in_s,
+      volume: selClip.volume, x: selClip.x, y: selClip.y, w: selClip.w, opacity: selClip.opacity,
+      text: selClip.text, text_style: selClip.text_style, ...patch,
+    });
+  };
 
   let name = "—";
   let kind = "";
@@ -122,12 +132,12 @@ export function Inspector({ state, actions, dub, transport, trackCtl }: Props) {
             <div style={SECTION}>Biến đổi</div>
             <Slider label="Tỉ lệ" min={20} max={200} value={sel.scale ?? 100} onChange={(v) => actions.setClipNum("scale", v)} display={`${sel.scale ?? 100}%`} />
             <Slider label="Dọc" min={-100} max={100} value={sel.posY ?? 0} onChange={(v) => actions.setClipNum("posY", v)} display={`${sel.posY ?? 0}`} mode="center" />
-            <Slider label="Độ mờ" min={0} max={100} value={sel.opacity ?? 100} onChange={(v) => actions.setClipNum("opacity", v)} display={`${sel.opacity ?? 100}%`} />
+            <Slider label="Độ mờ" min={0} max={100} value={sel.opacity ?? 100} onChange={(v) => actions.setClipNum("opacity", v)} onCommit={isUserClip ? (v) => commitClip({ opacity: v / 100 }) : undefined} display={`${sel.opacity ?? 100}%`} />
             {sel.type === "video" && (
               <>
                 <Divider />
                 <div style={SECTION}>Âm lượng &amp; tốc độ</div>
-                <Slider label="Âm lượng" min={0} max={100} value={sel.vol ?? 100} onChange={(v) => actions.setClipNum("vol", v)} display={`${sel.vol ?? 100}`} />
+                <Slider label="Âm lượng" min={0} max={100} value={sel.vol ?? 100} onChange={(v) => actions.setClipNum("vol", v)} onCommit={isUserClip ? (v) => commitClip({ volume: v / 100 }) : undefined} display={`${sel.vol ?? 100}`} />
                 <Divider />
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 13 }}>
                   <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase", color: C.muted2 }}>Màu sắc</span>
@@ -144,7 +154,7 @@ export function Inspector({ state, actions, dub, transport, trackCtl }: Props) {
         {sel && sel.type === "audio" && (
           <>
             <div style={SECTION}>Âm thanh</div>
-            <Slider label="Âm lượng" labelW={60} min={0} max={100} value={sel.vol ?? 100} onChange={(v) => actions.setClipNum("vol", v)} display={`${sel.vol ?? 100}`} />
+            <Slider label="Âm lượng" labelW={60} min={0} max={100} value={sel.vol ?? 100} onChange={(v) => actions.setClipNum("vol", v)} onCommit={isUserClip ? (v) => commitClip({ volume: v / 100 }) : undefined} display={`${sel.vol ?? 100}`} />
             <Slider label="Tốc độ" labelW={60} min={50} max={200} value={sel.speed ?? 100} onChange={(v) => actions.setClipNum("speed", v)} display={`${((sel.speed ?? 100) / 100).toFixed(2)}`} />
             <Divider />
             <div style={SECTION}>Fade</div>
