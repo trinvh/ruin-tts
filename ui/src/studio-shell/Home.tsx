@@ -19,10 +19,7 @@ interface Props {
 const FEATURES: { key: FeatureKey; title: string; desc: string; icon: IconName; color: string; tile: string }[] = [
   { key: "dub", title: "Lồng tiếng", desc: "Dịch & lồng tiếng video tiếng Trung / Anh sang tiếng Việt theo timestamp.", icon: "film", color: C.purpleLt, tile: "rgba(146,136,224,.18)" },
   { key: "tts", title: "Đọc (TTS)", desc: "Chuyển văn bản thành giọng nói tự nhiên, nhiều giọng & ngôn ngữ.", icon: "wave", color: C.teal, tile: "rgba(80,209,170,.16)" },
-  { key: "flows", title: "Flows", desc: "Thiết kế quy trình xử lý tự động cho video & âm thanh.", icon: "flows", color: C.blue, tile: "rgba(101,176,246,.16)" },
-  { key: "runs", title: "Runs", desc: "Theo dõi tiến trình & lịch sử các tác vụ đã chạy.", icon: "runs", color: C.orange, tile: "rgba(255,181,114,.16)" },
   { key: "settings", title: "Cài đặt", desc: "Hồ sơ, giao diện, bảo mật & thông tin ứng dụng.", icon: "settings", color: C.steel, tile: "rgba(171,187,194,.14)" },
-  { key: "api", title: "API", desc: "Tích hợp Beesoft Studio vào quy trình của bạn qua API.", icon: "api", color: C.coral, tile: "rgba(234,124,105,.16)" },
 ];
 
 const SECTION: React.CSSProperties = { fontSize: 11.5, fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase", color: C.muted3, marginBottom: 14 };

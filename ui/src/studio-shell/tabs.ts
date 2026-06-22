@@ -1,7 +1,7 @@
 import { C } from "./theme";
 import type { IconName } from "./icons";
 
-export type FeatureKey = "dub" | "tts" | "flows" | "runs" | "settings" | "api";
+export type FeatureKey = "dub" | "tts" | "settings";
 export type TabKind = "home" | FeatureKey | "project";
 
 export interface Tab {
@@ -17,20 +17,14 @@ export interface Tab {
  * navigates + shows <Outlet/>. Returns a literal route path (kept as a union so
  * the router's typed `navigate` accepts it) or null for overlay surfaces.
  */
-export type RoutedPath = "/" | "/flows" | "/runs" | "/settings" | "/api";
+export type RoutedPath = "/" | "/settings";
 
 export function routeFor(key: FeatureKey): RoutedPath | null {
   switch (key) {
     case "tts":
       return "/";
-    case "flows":
-      return "/flows";
-    case "runs":
-      return "/runs";
     case "settings":
       return "/settings";
-    case "api":
-      return "/api";
     default:
       return null; // dub / home / project are shell overlays
   }
@@ -39,19 +33,13 @@ export function routeFor(key: FeatureKey): RoutedPath | null {
 export const FEATURE_TITLE: Record<FeatureKey, string> = {
   dub: "Lồng tiếng",
   tts: "Đọc (TTS)",
-  flows: "Flows",
-  runs: "Runs",
   settings: "Cài đặt",
-  api: "API",
 };
 
 export const FEATURE_ICON: Record<FeatureKey, IconName> = {
   dub: "film",
   tts: "wave",
-  flows: "flows",
-  runs: "runs",
   settings: "settings",
-  api: "api",
 };
 
 const DUB_LABEL: Record<string, string> = {

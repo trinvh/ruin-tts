@@ -104,9 +104,7 @@ impl TtsRequest {
             max_new_frames: self.max_new_frames.unwrap_or(def.max_new_frames),
             max_chars: self.max_chars.unwrap_or(def.max_chars),
             silence_p: self.silence_p.unwrap_or(def.silence_p),
-            paragraph_silence_p: self
-                .paragraph_silence_p
-                .unwrap_or(def.paragraph_silence_p),
+            paragraph_silence_p: self.paragraph_silence_p.unwrap_or(def.paragraph_silence_p),
             crossfade_p: self.crossfade_p.unwrap_or(def.crossfade_p),
         })
     }

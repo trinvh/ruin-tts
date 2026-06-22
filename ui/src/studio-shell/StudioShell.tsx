@@ -153,8 +153,7 @@ export function StudioShell() {
 
   const projectTabs = tabs.filter((t) => t.kind === "project");
   const isOverlay = active.kind === "home" || active.kind === "dub" || active.kind === "project";
-  // The TTS + Settings pages own their full-height layout (no document padding);
-  // the rest (Flows/Runs/API) are scrolling document pages.
+  // The TTS + Settings pages own their full-height layout (no document padding).
   const fullBleed = !isOverlay && (active.kind === "tts" || active.kind === "settings");
 
   if (gate === "checking") return null; // dark native window bg while probing
@@ -209,7 +208,7 @@ export function StudioShell() {
 
       {/* content */}
       <div style={{ flex: 1, minHeight: 0, background: C.content, position: "relative" }}>
-        {/* router-backed feature pages (TTS / Flows / Runs / Settings / API) */}
+        {/* router-backed feature pages (TTS / Settings) */}
         <div style={{ position: "absolute", inset: 0, display: isOverlay ? "none" : "block", overflow: fullBleed ? "hidden" : "auto", background: fullBleed ? C.appBg : "#0d1117" }}>
           {fullBleed ? (
             <Outlet />

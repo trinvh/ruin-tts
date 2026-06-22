@@ -9,42 +9,6 @@ export function base(): Promise<string> {
   return basePromise;
 }
 
-export type Novel = { id: string; slug: string; title: string; author: string | null; chapterCount: number; coverUrl: string | null };
-
-export type NodeField = {
-  key: string;
-  label: string;
-  kind: "novel" | "number" | "text" | "textarea" | "bool" | "select";
-  options?: string[];
-  default?: unknown;
-};
-export type NodeSpec = {
-  type: string;
-  label: string;
-  desc?: string;
-  fields: NodeField[];
-  /** True for control-flow blocks (If/Loop) with multiple named output ports. */
-  control?: boolean;
-  /** Named source handles, e.g. ["then","else"] or ["body","done"]. */
-  handles?: string[];
-};
-
-export type GraphNode = { id: string; type: string; config: Record<string, unknown>; position?: { x: number; y: number } };
-export type GraphEdge = { from: string; to: string; handle?: string };
-export type Graph = { id: string; name: string; version: number; nodes: GraphNode[]; edges: GraphEdge[] };
-
-export type RunSummary = { id: string; status: string; preview: boolean; label: string; error: string | null; created_at: string; updated_at: string };
-export type RunStep = {
-  node_id: string;
-  node_type: string;
-  status: "pending" | "running" | "done" | "failed" | "cancelled";
-  input: unknown;
-  output: { logs?: string[]; state?: Record<string, unknown>; error?: string } | null;
-  started_at: string | null;
-  finished_at: string | null;
-};
-export type RunDetail = RunSummary & { steps: RunStep[] };
-
 export type Profile = {
   site_name: string; voice: string; emotion: string; format: string;
   wpm: number; cap_seconds: number; overhead_seconds: number;
@@ -97,53 +61,6 @@ async function j<T>(res: Response): Promise<T> {
   return res.json();
 }
 
-export async function searchNovels(search: string): Promise<{ items: Novel[] }> {
-  const u = new URL(`${await base()}/api/novels`);
-  if (search) u.searchParams.set("search", search);
-  u.searchParams.set("limit", "20");
-  return j(await fetch(u));
-}
-export async function getNodeSpecs(): Promise<NodeSpec[]> {
-  return j(await fetch(`${await base()}/api/nodes`));
-}
-export async function getDefaultGraph(): Promise<Graph> {
-  return j(await fetch(`${await base()}/api/workflow/default`));
-}
-export async function getLoopGraph(): Promise<Graph> {
-  return j(await fetch(`${await base()}/api/workflow/loop`));
-}
-export async function listWorkflows(): Promise<Graph[]> {
-  return j(await fetch(`${await base()}/api/workflows`));
-}
-export async function getWorkflow(id: string): Promise<Graph> {
-  return j(await fetch(`${await base()}/api/workflows/${encodeURIComponent(id)}`));
-}
-export async function saveWorkflow(graph: Graph): Promise<void> {
-  const r = await fetch(`${await base()}/api/workflows`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(graph) });
-  if (!r.ok) throw new Error(`${r.status}: ${await r.text().catch(() => "")}`);
-}
-export async function deleteWorkflow(id: string): Promise<void> {
-  await fetch(`${await base()}/api/workflows/${encodeURIComponent(id)}`, { method: "DELETE" });
-}
-export async function retryRun(runId: string, fromNode: string): Promise<{ run_id: string }> {
-  return j(await fetch(`${await base()}/api/runs/${runId}/retry?from=${encodeURIComponent(fromNode)}`, { method: "POST" }));
-}
-export async function createRun(graph: Graph, preview: boolean): Promise<{ run_id: string }> {
-  return j(await fetch(`${await base()}/api/runs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ graph, preview }) }));
-}
-export async function listRuns(): Promise<RunSummary[]> {
-  return j(await fetch(`${await base()}/api/runs`));
-}
-export async function cancelRun(id: string): Promise<void> {
-  const r = await fetch(`${await base()}/api/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
-  if (!r.ok) throw new Error(`${r.status}: ${await r.text().catch(() => "")}`);
-}
-export async function clearRuns(): Promise<{ deleted: number }> {
-  return j(await fetch(`${await base()}/api/runs`, { method: "DELETE" }));
-}
-export async function getRun(id: string): Promise<RunDetail> {
-  return j(await fetch(`${await base()}/api/runs/${id}`));
-}
 export async function fileUrl(path: string): Promise<string> {
   return `${await base()}/api/file?path=${encodeURIComponent(path)}`;
 }
