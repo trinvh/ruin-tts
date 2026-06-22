@@ -6,6 +6,7 @@ import {
   fileUrl,
   getDubInfo,
   getDubProject,
+  listClones,
   runDubStep,
   setDubSpeakerVoice,
   updateDubSegment,
@@ -14,6 +15,7 @@ import {
   type DubMediaInfo,
   type DubSettings,
   type DubStep,
+  type VoiceClone,
 } from "../../studioApi";
 import { settingsOf, type VoiceOpt } from "../../components/dubbing/shared";
 
@@ -70,6 +72,7 @@ export function useDubProject(id: string): DubProjectHook {
   const [detail, setDetail] = useState<DubDetail | null>(null);
   const [info, setInfo] = useState<DubMediaInfo | null>(null);
   const [voices, setVoices] = useState<Voice[]>([]);
+  const [clones, setClones] = useState<VoiceClone[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [autoRun, setAutoRun] = useState(false);
   const [videoUrl, setVideoUrl] = useState("");
@@ -88,6 +91,7 @@ export function useDubProject(id: string): DubProjectHook {
   useEffect(() => {
     void refresh();
     getVoices().then(setVoices).catch(() => {});
+    listClones().then(setClones).catch(() => {});
     getDubInfo(id).then(setInfo).catch(() => {});
     void dubVideoUrl(id).then(setVideoUrl);
   }, [id, refresh]);
@@ -228,7 +232,18 @@ export function useDubProject(id: string): DubProjectHook {
   }, [id, refresh]);
 
   const segments = detail?.segments ?? [];
-  const voiceOpts: VoiceOpt[] = useMemo(() => voices.map((v) => ({ value: v.id, label: v.label })), [voices]);
+  // Engine presets + on-disk clones (bundled voice pack + user clones). Clones
+  // are stored as `clone:<id>` and resolved to a ref_id at synth time.
+  const voiceOpts: VoiceOpt[] = useMemo(
+    () => [
+      ...voices.map((v) => ({ value: v.id, label: v.label })),
+      ...clones.map((c) => ({
+        value: `clone:${c.id}`,
+        label: c.builtin ? `${c.name} (bộ giọng)` : `${c.name} (của bạn)`,
+      })),
+    ],
+    [voices, clones],
+  );
   const genderBySpeaker = useMemo(
     () => Object.fromEntries((detail?.speakers ?? []).map((sp) => [sp.speaker, sp.gender])),
     [detail?.speakers],
