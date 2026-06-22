@@ -364,9 +364,19 @@ pub fn export_audio_args(
     out: &Path,
     original_volume: f64,
     vn_volume: f64,
+    lead_in: f64,
 ) -> Vec<String> {
+    let delay = if lead_in > 0.0 {
+        format!(
+            ";[amx]adelay={ms}:all=1[a]",
+            ms = (lead_in * 1000.0).round() as i64
+        )
+    } else {
+        String::new()
+    };
+    let mix_out = if lead_in > 0.0 { "[amx]" } else { "[a]" };
     let fc = format!(
-        "[0:a]volume={ov:.3}[orig];[1:a]volume={vv:.3}[vn];[orig][vn]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]",
+        "[0:a]volume={ov:.3}[orig];[1:a]volume={vv:.3}[vn];[orig][vn]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0{mix_out}{delay}",
         ov = original_volume.clamp(0.0, 1.0),
         vv = vn_volume.clamp(0.0, 1.0),
     );
@@ -485,6 +495,9 @@ pub struct ExportOpts<'a> {
     pub frame: Option<(u32, u32)>,
     /// Image/banner overlays burned over the video for their time range.
     pub overlays: Vec<OverlayArg<'a>>,
+    /// Lead-in seconds: pad the video with black at the front and delay the audio
+    /// by this amount (subtitle/overlay times are pre-shifted by the caller).
+    pub lead_in: f64,
 }
 
 /// One image overlay for the export: a file placed at a fractional position/size
@@ -502,7 +515,14 @@ pub struct OverlayArg<'a> {
 /// Build the blur filterchain producing `[vb]`. With known frame dimensions the
 /// blurred patch gets a feathered (soft) alpha so its edges fade; otherwise a
 /// simple hard-edged crop+overlay (fractional, resolution-independent).
-fn blur_filterchain(x: f64, y: f64, w: f64, h: f64, frame: Option<(u32, u32)>) -> String {
+fn blur_filterchain(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    frame: Option<(u32, u32)>,
+    src: &str,
+) -> String {
     if let Some((vw, vh)) = frame {
         let cw = ((vw as f64 * w).round() as i64).max(2);
         let ch = ((vh as f64 * h).round() as i64).max(2);
@@ -517,7 +537,7 @@ fn blur_filterchain(x: f64, y: f64, w: f64, h: f64, frame: Option<(u32, u32)>) -
             .max(1);
         let (iw, ih) = (cw - 2 * fp, ch - 2 * fp);
         format!(
-            "[0:v]split=2[bg][fg];\
+            "{src}split=2[bg][fg];\
              [fg]crop={cw}:{ch}:{cx}:{cy},gblur=sigma=18,format=yuva420p[bl];\
              color=black:s={cw}x{ch},drawbox=x={fp}:y={fp}:w={iw}:h={ih}:color=white:t=fill,gblur=sigma={fps:.1}[mask];\
              [bl][mask]alphamerge[bm];\
@@ -526,7 +546,7 @@ fn blur_filterchain(x: f64, y: f64, w: f64, h: f64, frame: Option<(u32, u32)>) -
         )
     } else {
         format!(
-            "[0:v]split=2[bg][fg];[fg]crop=iw*{w:.4}:ih*{h:.4}:iw*{x:.4}:ih*{y:.4},gblur=sigma=18[bl];[bg][bl]overlay=W*{x:.4}:H*{y:.4}[vb]"
+            "{src}split=2[bg][fg];[fg]crop=iw*{w:.4}:ih*{h:.4}:iw*{x:.4}:ih*{y:.4},gblur=sigma=18[bl];[bg][bl]overlay=W*{x:.4}:H*{y:.4}[vb]"
         )
     }
 }
@@ -550,25 +570,49 @@ pub async fn has_filter(name: &str) -> bool {
 /// and/or adding subtitles (burned via libass, or embedded as a soft track). The
 /// video stream is copied unless a video filter (blur/burn) forces a re-encode.
 pub fn export_video_args(video: &Path, voice: &Path, out: &Path, opts: &ExportOpts) -> Vec<String> {
-    let audio_fc = format!(
-        "[0:a]volume={ov:.3}[orig];[1:a]volume={vv:.3}[vn];[orig][vn]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]",
-        ov = opts.original_volume.clamp(0.0, 1.0),
-        vv = opts.vn_volume.clamp(0.0, 1.0),
-    );
+    let lead = opts.lead_in.max(0.0);
+    // Mix original + VN; when there's a lead-in, delay the whole mix so it lines
+    // up with the black-padded video.
+    let audio_fc = if lead > 0.0 {
+        format!(
+            "[0:a]volume={ov:.3}[orig];[1:a]volume={vv:.3}[vn];[orig][vn]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[amx];[amx]adelay={ms}:all=1[a]",
+            ov = opts.original_volume.clamp(0.0, 1.0),
+            vv = opts.vn_volume.clamp(0.0, 1.0),
+            ms = (lead * 1000.0).round() as i64,
+        )
+    } else {
+        format!(
+            "[0:a]volume={ov:.3}[orig];[1:a]volume={vv:.3}[vn];[orig][vn]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]",
+            ov = opts.original_volume.clamp(0.0, 1.0),
+            vv = opts.vn_volume.clamp(0.0, 1.0),
+        )
+    };
 
-    // Video filter chain (only when blur or burned subtitles are requested).
+    // Video filter chain (only when a lead-in, blur or burned subtitles apply).
     let mut vchain: Vec<String> = Vec::new();
     let mut vlabel = "0:v:0".to_string(); // stream spec used when not filtered (copy)
+                                          // Lead-in must come first so blur/subtitles/overlays sit on the padded timeline.
+    if lead > 0.0 {
+        vchain.push(format!(
+            "[0:v]tpad=start_duration={lead:.3}:start_mode=add:color=black[vlead]"
+        ));
+        vlabel = "[vlead]".to_string();
+    }
     if let Some((x, y, w, h)) = opts.blur {
         let x = x.clamp(0.0, 0.99);
         let y = y.clamp(0.0, 0.99);
         let w = w.clamp(0.02, 1.0 - x);
         let h = h.clamp(0.02, 1.0 - y);
+        let base = if vchain.is_empty() {
+            "[0:v]".to_string()
+        } else {
+            vlabel.clone()
+        };
         // `split` (use the source twice) + `gblur` (sigma-based, unlike boxblur
         // whose radius must not exceed the region). Edges are feathered via a
         // soft alpha mask when the frame size is known. NOTE: `overlay`'s x/y use
         // `W`/`H`; `iw`/`ih` are undefined there (only in `crop`) → EINVAL (-22).
-        vchain.push(blur_filterchain(x, y, w, h, opts.frame));
+        vchain.push(blur_filterchain(x, y, w, h, opts.frame, &base));
         vlabel = "[vb]".to_string();
     }
     if let Some(sub) = opts.subtitles_burn {
@@ -1065,6 +1109,7 @@ mod tests {
             blur: None,
             frame: None,
             overlays: vec![],
+            lead_in: 0.0,
         };
         let a = export_video_args(&p("v.mp4"), &p("vn.wav"), &p("o.mp4"), &o);
         let j = a.join(" ");
@@ -1087,6 +1132,7 @@ mod tests {
             blur: Some((0.1, 0.84, 0.8, 0.14)),
             frame: Some((1000, 500)),
             overlays: vec![],
+            lead_in: 0.0,
         };
         let a = export_video_args(&p("v.mp4"), &p("vn.wav"), &p("o.mp4"), &o);
         let j = a.join(" ");
@@ -1116,6 +1162,7 @@ mod tests {
             blur: Some((0.1, 0.84, 0.8, 0.14)),
             frame: None,
             overlays: vec![],
+            lead_in: 0.0,
         };
         let j = export_video_args(&p("v.mp4"), &p("vn.wav"), &p("o.mp4"), &o).join(" ");
         assert!(j.contains("overlay=W*0.1000:H*0.8400"));
@@ -1136,6 +1183,7 @@ mod tests {
             blur: None,
             frame: None,
             overlays: vec![],
+            lead_in: 0.0,
         };
         let a = export_video_args(&p("v.mp4"), &p("vn.wav"), &p("o.mp4"), &o);
         let j = a.join(" ");

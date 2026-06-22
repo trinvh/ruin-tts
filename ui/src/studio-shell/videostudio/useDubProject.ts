@@ -12,6 +12,7 @@ import {
   runDubStep,
   setDubSegmentOffset,
   setDubSpeakerVoice,
+  setDubVideoOffset,
   updateDubSegment,
   updateDubSettings,
   updateOverlay,
@@ -78,6 +79,8 @@ export interface DubProjectHook {
   removeOverlay: (oid: string) => Promise<void>;
   /** Shift a dubbed line on the timeline (seconds); affects build + export. */
   setSegmentOffset: (segId: string, offsetS: number) => Promise<void>;
+  /** Video lead-in (seconds of empty space before the video). */
+  setVideoOffset: (offsetS: number) => Promise<void>;
 }
 
 /** Real video-dubbing project state: loads + polls a project, exposes the pipeline. */
@@ -289,6 +292,17 @@ export function useDubProject(id: string): DubProjectHook {
     },
     [refresh],
   );
+  const setVideoOffset = useCallback(
+    async (offsetS: number) => {
+      try {
+        await setDubVideoOffset(id, Math.max(0, offsetS));
+        await refresh();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [id, refresh],
+  );
 
   const segments = detail?.segments ?? [];
   // Engine presets + on-disk clones (bundled voice pack + user clones). Clones
@@ -338,5 +352,6 @@ export function useDubProject(id: string): DubProjectHook {
     patchOverlay,
     removeOverlay,
     setSegmentOffset,
+    setVideoOffset,
   };
 }

@@ -613,6 +613,18 @@ impl Db {
         Ok(())
     }
 
+    /// Set the video lead-in (seconds of empty space before the video).
+    pub async fn set_dub_video_offset(&self, id: &str, offset_s: f64) -> Result<()> {
+        sqlx::query(
+            "UPDATE dub_projects SET video_offset_s = ?, updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(offset_s.max(0.0))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Reset every segment's synthesized audio (paths + fit factor + status) for a
     /// project, so re-running synthesis starts clean and the TTS tracks clear.
     pub async fn clear_dub_synth(&self, project_id: &str) -> Result<()> {
@@ -1087,6 +1099,7 @@ fn dub_project_from_row(r: sqlx::sqlite::SqliteRow) -> crate::dub::DubProject {
         sub_color: r.get("sub_color"),
         sub_bilingual: r.get::<i64, _>("sub_bilingual") != 0,
         video_enabled: r.get::<i64, _>("video_enabled") != 0,
+        video_offset_s: r.get("video_offset_s"),
         vn_track_path: r.get("vn_track_path"),
         export_path: r.get("export_path"),
         created_at: r.get("created_at"),

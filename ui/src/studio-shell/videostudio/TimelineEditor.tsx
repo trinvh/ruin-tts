@@ -49,7 +49,7 @@ interface Props {
 // ── layout constants (gutter + editor rows must agree) ──
 const GUTTER_W = 128;
 const ROW_H = 46;
-const RULER_H = 26;
+const RULER_H = 32; // must match the library's .timeline-editor-time-area height
 const START_LEFT = 12; // px the lanes start in from the editor's left edge
 const TICK_SECONDS = 5; // seconds per major tick
 const MIN_PX_PER_SEC = 1; // floor so very low zoom stays usable
@@ -93,9 +93,9 @@ export function TimelineEditor({ state, actions, transport, trackCtl, onClipTrim
         actions: clips
           .filter((c) => c.track === k)
           .map((c) => {
-            // The source video + original/music audio are the time reference and
-            // stay locked. Dub lines (TTS), subtitles and banners move freely.
-            const locked = c.track === "V1" || c.track === "A1" || c.track === "A2";
+            // Original/music audio follow the video and stay locked. The video
+            // clip moves (= lead-in), and dub lines / subtitles / banners move.
+            const locked = c.track === "A1" || c.track === "A2";
             return {
               id: c.id,
               start: c.start,

@@ -32,6 +32,11 @@ export function VideoStudio({ projectId, title: initialTitle }: Props) {
   // Trimming/moving an overlay clip on the timeline persists its time range.
   const onTrimCommit = useCallback(
     (clipId: string, start: number, dur: number) => {
+      // Moving the video clip = lead-in (empty space before the video starts).
+      if (clipId === "vid") {
+        void dub.setVideoOffset(Math.max(0, start));
+        return;
+      }
       // Banner overlay: drag/trim sets its time range.
       if (clipId.startsWith("ovl_")) {
         const oid = clipId.slice(4);

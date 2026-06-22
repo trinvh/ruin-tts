@@ -45,6 +45,7 @@ pub fn routes() -> Router<AppState> {
             "/api/dub/projects/{id}/speakers/{speaker}/voice",
             put(set_speaker_voice),
         )
+        .route("/api/dub/projects/{id}/video-offset", put(set_video_offset))
         .route("/api/dub/projects/{id}/overlays", post(create_overlay))
         .route(
             "/api/dub/overlays/{oid}",
@@ -518,6 +519,20 @@ async fn serve_video(
         .await
         .map_err(|_| AppError::not_found("không đọc được file video"))?;
     Ok(([(header::CONTENT_TYPE, ct)], Bytes::from(bytes)).into_response())
+}
+
+#[derive(Deserialize)]
+struct VideoOffset {
+    offset_s: f64,
+}
+
+async fn set_video_offset(
+    State(st): State<AppState>,
+    AxPath(id): AxPath<String>,
+    Json(b): Json<VideoOffset>,
+) -> Result<Json<Value>, AppError> {
+    st.services.db.set_dub_video_offset(&id, b.offset_s).await?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 // ── Image/banner overlays ───────────────────────────────────────────────────────

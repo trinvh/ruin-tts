@@ -30,6 +30,9 @@
 
 .timeline-editor-edit-area {
   background-color: #191722; /* C.laneBg */
+  /* The lib adds a 10px gap above the rows; remove it so the editor rows line
+     up with our left gutter (gutter spacer = time-area height = 32px). */
+  margin-top: 0 !important;
 }
 
 /* Rows ------------------------------------------------------------------- */

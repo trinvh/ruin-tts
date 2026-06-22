@@ -225,7 +225,7 @@ function TrackPanel({ trackKey, dub, transport, trackCtl }: { trackKey: string; 
       <>
         <div style={SECTION}>Track video</div>
         <RowToggle label="Bật track video" sub="Tắt = xuất chỉ âm thanh (không hình)" on={enabled} onClick={() => trackCtl.toggle(trackKey)} />
-        <div style={{ fontSize: 10.5, color: C.muted3, marginTop: 12, lineHeight: 1.5 }}>Khung hình gốc là mốc thời gian của timeline nên không di chuyển được.</div>
+        <div style={{ fontSize: 10.5, color: C.muted3, marginTop: 12, lineHeight: 1.5 }}>Kéo clip video ra sau để chừa khoảng trống đầu video (lead-in); khi xuất sẽ có đoạn đen ở đầu.</div>
       </>
     );
   }

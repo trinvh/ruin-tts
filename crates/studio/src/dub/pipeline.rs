@@ -483,6 +483,7 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
             &out,
             project.original_volume,
             project.vn_volume,
+            project.video_offset_s,
         ))
         .await
         .context("xuất âm thanh tiếng Việt")?;
@@ -500,12 +501,14 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
     // subtitles still ship even though they can't be hard-coded.
     let (sub_path, use_burn) = if project.burn_subtitles {
         let segs = services.db.get_dub_segments(project_id).await?;
+        // Subtitles shift by the video lead-in too (the burned video is padded).
+        let lead = project.video_offset_s;
         let cues: Vec<media::Cue> = segs
             .iter()
             .filter(|s| !s.text_vi.trim().is_empty())
             .map(|s| media::Cue {
-                start: s.placed_start(),
-                end: s.placed_end(),
+                start: s.placed_start() + lead,
+                end: s.placed_end() + lead,
                 text: &s.text_vi,
                 top: if project.sub_bilingual {
                     Some(s.text_src.as_str())
@@ -582,6 +585,7 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
         },
         frame,
         overlays: overlay_args,
+        lead_in: project.video_offset_s,
     };
     media::run_ffmpeg(&media::export_video_args(
         Path::new(&project.video_path),

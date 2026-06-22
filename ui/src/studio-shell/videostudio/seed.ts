@@ -19,9 +19,10 @@ export function buildClips(detail: DubDetail | null, duration: number): Clip[] {
   const hasVi = segs.some((s) => s.text_vi.trim().length > 0);
   const hasTts = segs.some((s) => !!s.tts_path) || ["synthesized", "built", "done"].includes(p.status);
 
+  const vOff = Math.max(0, p.video_offset_s ?? 0); // lead-in before the video
   const clips: Clip[] = [
-    { id: "vid", track: "V1", type: "video", name: p.name, start: 0, dur, scale: 100, posY: 0, opacity: 100, vol: Math.round(p.original_volume * 100), bri: 0, con: 0, sat: 0 },
-    { id: "aud", track: "A1", type: "audio", kind: extracted ? "vocals" : "orig", name: extracted ? "Giọng gốc" : "Âm thanh gốc", srcVideo: "vid", start: 0, dur, vol: Math.round(p.original_volume * 100), speed: 100, fadeIn: 0, fadeOut: 0 },
+    { id: "vid", track: "V1", type: "video", name: p.name, start: vOff, dur, scale: 100, posY: 0, opacity: 100, vol: Math.round(p.original_volume * 100), bri: 0, con: 0, sat: 0 },
+    { id: "aud", track: "A1", type: "audio", kind: extracted ? "vocals" : "orig", name: extracted ? "Giọng gốc" : "Âm thanh gốc", srcVideo: "vid", start: vOff, dur, vol: Math.round(p.original_volume * 100), speed: 100, fadeIn: 0, fadeOut: 0 },
   ];
 
   const segDur = (s: { start_s: number; end_s: number }) => Math.max(0.2, s.end_s - s.start_s);

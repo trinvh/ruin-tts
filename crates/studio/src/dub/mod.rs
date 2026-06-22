@@ -52,6 +52,9 @@ pub struct DubProject {
     /// Video track enabled. When off, the editor previews audio-only and the
     /// export produces an audio file instead of a muxed video.
     pub video_enabled: bool,
+    /// Lead-in seconds: empty space before the video starts (export pads black +
+    /// delays audio/subtitles by this amount).
+    pub video_offset_s: f64,
     pub vn_track_path: Option<String>,
     pub export_path: Option<String>,
     pub created_at: String,

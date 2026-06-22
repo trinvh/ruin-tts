@@ -39,6 +39,7 @@ export type DubProject = {
   burn_subtitles: boolean; blur_subtitle: boolean;
   blur_x: number; blur_y: number; blur_w: number; blur_h: number; sub_y: number;
   sub_size: number; sub_color: string; sub_bilingual: boolean; video_enabled: boolean;
+  video_offset_s: number;
   vn_track_path: string | null; export_path: string | null;
   created_at: string; updated_at: string;
 };
@@ -192,6 +193,12 @@ export async function deleteOverlay(oid: string): Promise<void> {
 }
 export async function overlayImageUrl(oid: string): Promise<string> {
   return `${await base()}/api/dub/overlays/${oid}/image`;
+}
+export async function setDubVideoOffset(id: string, offset_s: number): Promise<void> {
+  const r = await fetch(`${await base()}/api/dub/projects/${id}/video-offset`, {
+    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ offset_s }),
+  });
+  if (!r.ok) throw new Error(`${r.status}: ${await r.text().catch(() => "")}`);
 }
 export type DubMediaInfo = {
   duration: number | null;
