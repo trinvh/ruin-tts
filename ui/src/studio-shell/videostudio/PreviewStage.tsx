@@ -5,6 +5,7 @@ import { HoverBox } from "../ui";
 import { fmt } from "./constants";
 import { OverlayLayer } from "./OverlayLayer";
 import { ClipPreview } from "./ClipPreview";
+import { DubAudioLayer } from "./DubAudioLayer";
 import { SUB_FONT, SUB_OUTLINE, subBoxStyle, subFontSize } from "./subtitleStyle";
 import type { StudioActions, StudioState } from "./useStudio";
 import type { DubProjectHook } from "./useDubProject";
@@ -142,7 +143,9 @@ export function PreviewStage({ state, actions, dub, transport }: Props) {
             </div>
           )}
         </div>
-        <audio ref={(el) => transport.attachVn(el)} src={dub.vnUrl || undefined} preload="auto" />
+        {/* Vietnamese dub played per segment from the clips, so timeline drags
+            move the voice live (not the pre-merged track). */}
+        <DubAudioLayer clips={dub.clips} time={t} playing={transport.playing} volume={vnVol} />
       </div>
 
       {/* transport */}
