@@ -582,6 +582,36 @@ impl Db {
         Ok(())
     }
 
+    /// Null out a generated-artifact column (whitelisted) — used when a step is
+    /// re-run so the stale downstream track drops off the timeline until it is
+    /// regenerated.
+    pub async fn clear_dub_field(&self, id: &str, column: &str) -> Result<()> {
+        let column = match column {
+            "vn_track_path" => "vn_track_path",
+            "export_path" => "export_path",
+            "audio_path" => "audio_path",
+            other => anyhow::bail!("clear_dub_field: cột không hợp lệ '{other}'"),
+        };
+        let sql = format!(
+            "UPDATE dub_projects SET {column} = NULL, updated_at = datetime('now') WHERE id = ?"
+        );
+        sqlx::query(&sql).bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Reset every segment's synthesized audio (paths + fit factor + status) for a
+    /// project, so re-running synthesis starts clean and the TTS tracks clear.
+    pub async fn clear_dub_synth(&self, project_id: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE dub_segments SET tts_path = NULL, fitted_path = NULL, factor = NULL, \
+             status = 'pending' WHERE project_id = ?",
+        )
+        .bind(project_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn update_dub_settings(
         &self,

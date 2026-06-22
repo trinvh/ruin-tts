@@ -94,6 +94,9 @@ function DubTab({ dub }: { dub: DubProjectHook }) {
   const status = p.status;
   const di = doneIdx(status);
   const working = dub.busy || dub.autoRun;
+  // A step failed if the project carries an error: status was reverted to that
+  // step's prerequisite, so the failed step is the current "next" one.
+  const projErr = p.error?.trim() ? p.error : null;
 
   const curVoice = (() => {
     const sp = dub.detail?.speakers ?? [];
@@ -120,6 +123,7 @@ function DubTab({ dub }: { dub: DubProjectHook }) {
           const done = ORDER.indexOf(info.done) <= di;
           const running = status === info.busy;
           const isNext = info.from === status;
+          const failed = isNext && !running && !!projErr;
           const locked = !done && !running && !isNext;
           const segs = dub.detail?.segments ?? [];
           const previewLines =
@@ -138,7 +142,9 @@ function DubTab({ dub }: { dub: DubProjectHook }) {
               running={running}
               locked={locked}
               working={working}
-              runLabel={meta.runLabel}
+              failed={failed}
+              error={failed ? projErr : undefined}
+              runLabel={failed ? "Thử lại" : done ? "Chạy lại" : meta.runLabel}
               onRun={() => dub.run(meta.step)}
               previewLines={previewLines}
               voice={meta.step === "synthesize" && !locked ? curVoice : undefined}
@@ -168,6 +174,8 @@ interface StageCardProps {
   running: boolean;
   locked: boolean;
   working: boolean;
+  failed?: boolean;
+  error?: string | null;
   runLabel: string;
   onRun: () => void;
   previewLines?: { tc: string; txt: string }[];
@@ -177,18 +185,18 @@ interface StageCardProps {
   extra?: React.ReactNode;
 }
 
-function StageCard({ num, title, sub, done, running, locked, working, runLabel, onRun, previewLines, voice, voiceOpts, onVoice, extra }: StageCardProps) {
-  const cardBorder = done ? "rgba(80,209,170,.35)" : running ? "rgba(255,181,114,.4)" : C.borderSoft;
-  const cardBg = running ? "rgba(255,181,114,.06)" : C.panel2;
-  const iconBg = done ? "rgba(80,209,170,.2)" : running ? "rgba(255,181,114,.2)" : C.panel3;
-  const iconFg = done ? C.teal : running ? C.orange : C.muted;
+function StageCard({ num, title, sub, done, running, locked, working, failed, error, runLabel, onRun, previewLines, voice, voiceOpts, onVoice, extra }: StageCardProps) {
+  const cardBorder = failed ? "rgba(255,124,163,.45)" : done ? "rgba(80,209,170,.35)" : running ? "rgba(255,181,114,.4)" : C.borderSoft;
+  const cardBg = failed ? "rgba(255,124,163,.06)" : running ? "rgba(255,181,114,.06)" : C.panel2;
+  const iconBg = failed ? "rgba(255,124,163,.2)" : done ? "rgba(80,209,170,.2)" : running ? "rgba(255,181,114,.2)" : C.panel3;
+  const iconFg = failed ? C.pink : done ? C.teal : running ? C.orange : C.muted;
   const runDisabled = locked || running || working;
 
   return (
     <div style={{ border: `1px solid ${cardBorder}`, background: cardBg, borderRadius: 11, padding: 13, opacity: locked ? 0.5 : 1 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <span style={{ width: 26, height: 26, flex: "none", borderRadius: 7, background: iconBg, color: iconFg, display: "grid", placeItems: "center", fontFamily: MONO, fontSize: 12, fontWeight: 700 }}>
-          {done ? <Icon name="check" size={14} stroke={3} /> : running ? <span style={{ width: 12, height: 12, border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "bss-spin .7s linear infinite" }} /> : num}
+          {failed ? "!" : done ? <Icon name="check" size={14} stroke={3} /> : running ? <span style={{ width: 12, height: 12, border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "bss-spin .7s linear infinite" }} /> : num}
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: locked ? C.muted : "#fff" }}>{title}</div>
@@ -196,6 +204,12 @@ function StageCard({ num, title, sub, done, running, locked, working, runLabel, 
         </div>
         {locked && <Icon name="lock" size={14} stroke={1.8} color={C.muted5} />}
       </div>
+
+      {failed && error && (
+        <div style={{ marginTop: 10, border: "1px solid rgba(255,124,163,.3)", background: "rgba(255,124,163,.1)", color: C.pink, borderRadius: 7, padding: "7px 9px", fontSize: 11, lineHeight: 1.45, maxHeight: 96, overflow: "auto", whiteSpace: "pre-wrap" }}>
+          {error}
+        </div>
+      )}
 
       {voice !== undefined && (
         <div style={{ position: "relative", marginTop: 11 }}>
@@ -225,20 +239,23 @@ function StageCard({ num, title, sub, done, running, locked, working, runLabel, 
 
       {extra}
 
-      {!done && (
+      {!locked && (
         <div style={{ marginTop: 11 }}>
           <button
             onClick={runDisabled ? undefined : onRun}
+            title={done && !failed ? "Chạy lại bước này (ghi đè kết quả cũ)" : undefined}
             style={{
               width: "100%", height: 32, borderRadius: 7, fontFamily: FONT, fontSize: 12.5, fontWeight: 600,
               display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
               cursor: runDisabled ? "default" : "pointer",
-              border: `1px solid ${locked ? C.borderInset2 : running ? "rgba(255,181,114,.4)" : "rgba(146,136,224,.45)"}`,
-              background: locked ? C.inset : running ? "rgba(255,181,114,.12)" : "rgba(146,136,224,.14)",
-              color: locked ? C.muted5 : running ? C.orange : C.purpleLt,
+              border: `1px solid ${
+                running ? "rgba(255,181,114,.4)" : failed ? "rgba(255,124,163,.5)" : done ? C.borderInset2 : "rgba(146,136,224,.45)"
+              }`,
+              background: running ? "rgba(255,181,114,.12)" : failed ? "rgba(255,124,163,.14)" : done ? "transparent" : "rgba(146,136,224,.14)",
+              color: running ? C.orange : failed ? C.pink : done ? C.muted3 : C.purpleLt,
             }}
           >
-            {running ? "Đang xử lý…" : locked ? "Khoá" : runLabel}
+            {running ? "Đang xử lý…" : runLabel}
           </button>
         </div>
       )}

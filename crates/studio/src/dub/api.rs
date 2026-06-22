@@ -232,11 +232,18 @@ async fn update_settings(
 
 // ── Steps ─────────────────────────────────────────────────────────────────────
 
-/// Run a pipeline step in the background: set `busy`, spawn, then set `done`
-/// (or `failed` + error). Returns immediately so the UI can poll.
+/// Run a pipeline step in the background: set `busy`, spawn, then set `done`.
+///
+/// On failure we do NOT collapse the project to a single "failed" state (which
+/// would lose how far the pipeline got and force a restart). Instead we revert
+/// to `from` — the step's prerequisite, i.e. the last completed checkpoint — and
+/// attach the error. Completed steps stay done; the failed step is simply the
+/// next runnable one (the UI flags it via the persisted error). Returns
+/// immediately so the UI can poll.
 async fn run_step<F, Fut>(
     st: AppState,
     id: String,
+    from: &str,
     busy: &str,
     done: &str,
     f: F,
@@ -248,10 +255,12 @@ where
     if st.services.db.get_dub_project(&id).await?.is_none() {
         return Err(AppError::not_found("không tìm thấy dự án"));
     }
+    // Setting `busy` clears any previous error for this project.
     st.services.db.set_dub_status(&id, busy, None).await?;
     let services = st.services.clone();
     let rid = id.clone();
     let done = done.to_string();
+    let from = from.to_string();
     spawn_tracked(st.running.clone(), dub_key(&id), async move {
         match f(services.clone(), rid.clone()).await {
             Ok(_) => {
@@ -260,7 +269,7 @@ where
             Err(e) => {
                 let _ = services
                     .db
-                    .set_dub_status(&rid, "failed", Some(&format!("{e:#}")))
+                    .set_dub_status(&rid, &from, Some(&format!("{e:#}")))
                     .await;
             }
         }
@@ -272,9 +281,14 @@ async fn step_extract(
     State(st): State<AppState>,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<Value>, AppError> {
-    run_step(st, id, "extracting", "extracted", |s, id| async move {
-        pipeline::extract_audio(&s, &id).await
-    })
+    run_step(
+        st,
+        id,
+        "created",
+        "extracting",
+        "extracted",
+        |s, id| async move { pipeline::extract_audio(&s, &id).await },
+    )
     .await
 }
 
@@ -282,9 +296,14 @@ async fn step_analyze(
     State(st): State<AppState>,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<Value>, AppError> {
-    run_step(st, id, "analyzing", "analyzed", |s, id| async move {
-        pipeline::analyze(&s, &id).await
-    })
+    run_step(
+        st,
+        id,
+        "extracted",
+        "analyzing",
+        "analyzed",
+        |s, id| async move { pipeline::analyze(&s, &id).await },
+    )
     .await
 }
 
@@ -292,9 +311,14 @@ async fn step_translate(
     State(st): State<AppState>,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<Value>, AppError> {
-    run_step(st, id, "translating", "translated", |s, id| async move {
-        pipeline::translate(&s, &id).await
-    })
+    run_step(
+        st,
+        id,
+        "analyzed",
+        "translating",
+        "translated",
+        |s, id| async move { pipeline::translate(&s, &id).await },
+    )
     .await
 }
 
@@ -302,9 +326,14 @@ async fn step_synthesize(
     State(st): State<AppState>,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<Value>, AppError> {
-    run_step(st, id, "synthesizing", "synthesized", |s, id| async move {
-        pipeline::synthesize(&s, &id).await
-    })
+    run_step(
+        st,
+        id,
+        "translated",
+        "synthesizing",
+        "synthesized",
+        |s, id| async move { pipeline::synthesize(&s, &id).await },
+    )
     .await
 }
 
@@ -312,9 +341,14 @@ async fn step_reshorten(
     State(st): State<AppState>,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<Value>, AppError> {
-    run_step(st, id, "synthesizing", "synthesized", |s, id| async move {
-        pipeline::reshorten_long(&s, &id).await.map(|_| ())
-    })
+    run_step(
+        st,
+        id,
+        "synthesized",
+        "synthesizing",
+        "synthesized",
+        |s, id| async move { pipeline::reshorten_long(&s, &id).await.map(|_| ()) },
+    )
     .await
 }
 
@@ -322,9 +356,14 @@ async fn step_build(
     State(st): State<AppState>,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<Value>, AppError> {
-    run_step(st, id, "building", "built", |s, id| async move {
-        pipeline::build_track(&s, &id).await
-    })
+    run_step(
+        st,
+        id,
+        "synthesized",
+        "building",
+        "built",
+        |s, id| async move { pipeline::build_track(&s, &id).await },
+    )
     .await
 }
 
@@ -332,10 +371,25 @@ async fn step_export(
     State(st): State<AppState>,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<Value>, AppError> {
-    run_step(st, id, "exporting", "done", |s, id| async move {
+    run_step(st, id, "built", "exporting", "done", |s, id| async move {
         pipeline::export(&s, &id).await
     })
     .await
+}
+
+/// Map a busy (`*-ing`) status back to the checkpoint a step started from, so
+/// cancelling mid-step leaves the project at its last completed state (not a
+/// dead-end "cancelled") and the step stays runnable.
+fn busy_from(status: &str) -> &'static str {
+    match status {
+        "extracting" => "created",
+        "analyzing" => "extracted",
+        "translating" => "analyzed",
+        "synthesizing" => "translated",
+        "building" => "synthesized",
+        "exporting" => "built",
+        _ => "created",
+    }
 }
 
 async fn cancel(
@@ -345,10 +399,12 @@ async fn cancel(
     if let Some(h) = st.running.lock().unwrap().remove(&dub_key(&id)) {
         h.abort();
     }
-    st.services
-        .db
-        .set_dub_status(&id, "cancelled", None)
-        .await?;
+    // Revert to the checkpoint the in-flight step started from.
+    let revert = match st.services.db.get_dub_project(&id).await? {
+        Some(p) => busy_from(&p.status),
+        None => "created",
+    };
+    st.services.db.set_dub_status(&id, revert, None).await?;
     Ok(Json(json!({ "ok": true })))
 }
 

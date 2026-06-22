@@ -199,6 +199,9 @@ pub async fn synthesize(services: &Services, project_id: &str) -> Result<()> {
         .get_dub_project(project_id)
         .await?
         .ok_or_else(|| anyhow!("không tìm thấy dự án"))?;
+    // Re-run starts clean: drop the old TTS audio so it disappears from the
+    // timeline and is rebuilt below (cached segments repopulate instantly).
+    services.db.clear_dub_synth(project_id).await?;
     let segs = services.db.get_dub_segments(project_id).await?;
     let speakers = services.db.get_dub_speakers(project_id).await?;
     let voice_by_speaker: HashMap<String, Option<String>> =
@@ -410,6 +413,11 @@ pub async fn reshorten_long(services: &Services, project_id: &str) -> Result<usi
 
 // ── Step 5: assemble the Vietnamese track on the source timeline ──────────────
 pub async fn build_track(services: &Services, project_id: &str) -> Result<()> {
+    // Re-run drops the old mixed track until the new one is written below.
+    services
+        .db
+        .clear_dub_field(project_id, "vn_track_path")
+        .await?;
     let segs = services.db.get_dub_segments(project_id).await?;
     let dir = project_dir(services, project_id);
     ensure_dir(&dir).await?;
@@ -452,6 +460,11 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
         .get_dub_project(project_id)
         .await?
         .ok_or_else(|| anyhow!("không tìm thấy dự án"))?;
+    // Re-run drops the previous export until the new file is written.
+    services
+        .db
+        .clear_dub_field(project_id, "export_path")
+        .await?;
     let vn = project
         .vn_track_path
         .clone()
