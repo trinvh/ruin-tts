@@ -550,7 +550,7 @@ impl Db {
         gemini_model: &str,
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO dub_projects (id, name, video_path, gemini_model, status) VALUES (?, ?, ?, ?, 'created')",
+            "INSERT INTO dub_projects (id, name, video_path, gemini_model, status, burn_subtitles) VALUES (?, ?, ?, ?, 'created', 1)",
         )
         .bind(id)
         .bind(name)

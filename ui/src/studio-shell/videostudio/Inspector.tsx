@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { C, FONT, MONO } from "../theme";
 import { Icon, type IconName } from "../icons";
-import { SUBC, trackLabel } from "./constants";
+import { SUBC, fmt, trackLabel } from "./constants";
 import { trackAudioKind, type TrackCtl } from "./trackmap";
 import type { StudioActions, StudioState } from "./useStudio";
 import type { DubProjectHook } from "./useDubProject";
@@ -62,14 +62,20 @@ export function Inspector({ state, actions, dub, transport, trackCtl }: Props) {
   const sel = !isTrack ? (state.clips.find((c: Clip) => c.id === state.sel) ?? null) : null;
   // The selected clip's backing dub_clip (for routing edits like subtitle text).
   const selClip = sel ? dub.detail?.clips.find((c) => c.id === sel.id) : undefined;
-  const subSegId =
-    sel && sel.type === "sub" && selClip?.origin.startsWith("dub:sub:")
+  // The dub segment behind a selected line (TTS or subtitle clip) — so clicking
+  // either shows the spoken line's speaker/time/source + editable translation.
+  const dubSegId = selClip?.origin.startsWith("dub:tts:")
+    ? selClip.origin.slice("dub:tts:".length)
+    : selClip?.origin.startsWith("dub:sub:")
       ? selClip.origin.slice("dub:sub:".length)
       : null;
-  const commitSub = (text: string) => {
-    if (!subSegId) return;
-    const seg = dub.detail?.segments.find((s) => s.id === subSegId);
-    void dub.setSegment(subSegId, text, seg?.voice ?? null);
+  const dubSeg = dubSegId ? dub.detail?.segments.find((s) => s.id === dubSegId) : undefined;
+  const [segDraft, setSegDraft] = useState("");
+  useEffect(() => {
+    setSegDraft(dubSeg?.text_vi ?? "");
+  }, [dubSeg?.id, dubSeg?.text_vi]);
+  const commitSegText = () => {
+    if (dubSegId) void dub.setSegment(dubSegId, segDraft, dubSeg?.voice ?? null);
   };
   // Persist a property change of a selected USER clip (volume/opacity).
   const isUserClip = selClip?.origin === "user";
@@ -127,6 +133,28 @@ export function Inspector({ state, actions, dub, transport, trackCtl }: Props) {
           </div>
         )}
 
+        {dubSeg && selClip && (
+          <>
+            <div style={SECTION}>Câu thoại</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9, fontSize: 11, fontFamily: MONO }}>
+              <span style={{ color: C.purpleLt }}>{fmt(selClip.start_s)} → {fmt(selClip.start_s + selClip.dur_s)}</span>
+              <span style={{ padding: "1px 7px", borderRadius: 5, background: C.panel3, color: C.muted2 }}>{dubSeg.speaker}</span>
+            </div>
+            {dubSeg.text_src?.trim() && (
+              <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.45, marginBottom: 10, background: C.inset, borderRadius: 7, padding: "8px 10px" }}>{dubSeg.text_src}</div>
+            )}
+            <div style={{ fontSize: 10.5, color: C.muted3, marginBottom: 5 }}>Bản dịch tiếng Việt</div>
+            <textarea
+              value={segDraft}
+              onChange={(e) => setSegDraft(e.target.value)}
+              onBlur={commitSegText}
+              rows={3}
+              style={{ width: "100%", resize: "vertical", background: C.inset, border: `1px solid ${C.borderInset}`, borderRadius: 7, color: "#fff", fontFamily: FONT, fontSize: 13, padding: "9px 11px", outline: "none", marginBottom: 16, lineHeight: 1.4 }}
+            />
+            <div style={{ fontSize: 10, color: C.muted3, marginTop: -10, marginBottom: 16 }}>Sửa bản dịch rồi chạy lại bước Đọc TTS để giọng khớp.</div>
+          </>
+        )}
+
         {sel && (sel.type === "video" || sel.type === "image") && (
           <>
             <div style={SECTION}>Biến đổi</div>
@@ -165,15 +193,6 @@ export function Inspector({ state, actions, dub, transport, trackCtl }: Props) {
 
         {sel && sel.type === "sub" && (
           <>
-            <div style={{ ...SECTION, marginBottom: 11 }}>{subSegId ? "Nội dung (tiếng Việt)" : "Nội dung (gốc)"}</div>
-            <input
-              value={sel.text ?? ""}
-              readOnly={!subSegId}
-              onChange={(e) => actions.setClipText(e.target.value)}
-              onBlur={(e) => commitSub(e.target.value)}
-              style={{ width: "100%", background: C.inset, border: `1px solid ${C.borderInset}`, borderRadius: 7, color: subSegId ? "#fff" : C.muted, fontFamily: FONT, fontSize: 13.5, padding: "9px 11px", outline: "none", marginBottom: 18 }}
-            />
-            {!subSegId && <div style={{ fontSize: 10.5, color: C.muted3, marginTop: -12, marginBottom: 16 }}>Phụ đề gốc chỉ để xem. Sửa bản dịch ở track “Phụ đề Việt”.</div>}
             <div style={{ ...SECTION, marginBottom: 11 }}>Kiểu chữ</div>
             <Slider label="Cỡ chữ" labelW={54} min={18} max={52} value={state.subStyle.size} onChange={(v) => actions.setSubNum("size", v)} onCommit={(v) => void dub.patchSettings({ sub_size: v })} display={`${state.subStyle.size}`} />
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
@@ -213,6 +232,7 @@ function TrackPanel({ trackKey, dub, transport, trackCtl }: { trackKey: string; 
         <TrackVolume kind={ak} value0={trackCtl.volume(trackKey) ?? 0} transport={transport} onCommit={(v) => trackCtl.setVolume(trackKey, v)} />
         <Divider />
         <RowToggle label="Bật track" sub={ak === "original" ? "Nghe + trộn tiếng gốc khi xuất" : "Nghe + trộn giọng lồng tiếng khi xuất"} on={enabled} onClick={() => trackCtl.toggle(trackKey)} />
+        {ak === "vn" && <SegmentList dub={dub} transport={transport} mode="vi" />}
       </>
     );
   }
@@ -221,7 +241,7 @@ function TrackPanel({ trackKey, dub, transport, trackCtl }: { trackKey: string; 
       <>
         <div style={SECTION}>Phụ đề Việt</div>
         <RowToggle label="Ghi vào video" sub="Hiện ở preview & in cứng vào video khi xuất" on={enabled} onClick={() => trackCtl.toggle(trackKey)} />
-        {!dub.detail?.project.vn_track_path && <div style={{ fontSize: 10.5, color: C.muted3, marginTop: 12 }}>Phụ đề lấy từ bản dịch của từng câu.</div>}
+        <SegmentList dub={dub} transport={transport} mode="vi" />
       </>
     );
   }
@@ -230,6 +250,7 @@ function TrackPanel({ trackKey, dub, transport, trackCtl }: { trackKey: string; 
       <>
         <div style={SECTION}>Phụ đề gốc</div>
         <RowToggle label="Hiện phụ đề gốc" sub="Hiện song ngữ ở preview & khi xuất" on={enabled} onClick={() => trackCtl.toggle(trackKey)} />
+        <SegmentList dub={dub} transport={transport} mode="src" />
       </>
     );
   }
@@ -245,6 +266,42 @@ function TrackPanel({ trackKey, dub, transport, trackCtl }: { trackKey: string; 
     );
   }
   return <div style={{ fontSize: 13, color: C.muted3, lineHeight: 1.5 }}>Track này không có cấu hình âm lượng.</div>;
+}
+
+/** The full list of spoken lines for a track — timestamp, speaker, text. Click a
+ *  row to jump the playhead there. */
+function SegmentList({ dub, transport, mode }: { dub: DubProjectHook; transport: Transport; mode: "vi" | "src" }) {
+  const segs = dub.detail?.segments ?? [];
+  return (
+    <>
+      <Divider />
+      <div style={{ ...SECTION, marginBottom: 9 }}>Danh sách câu thoại ({segs.length})</div>
+      {segs.length === 0 ? (
+        <div style={{ fontSize: 11.5, color: C.muted3 }}>Chưa có câu thoại — chạy bước Phân tích.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 380, overflowY: "auto", margin: "0 -3px", padding: "0 3px" }}>
+          {segs.map((s) => {
+            const at = s.start_s + (s.offset_s ?? 0);
+            const text = (mode === "vi" ? s.text_vi : s.text_src)?.trim() || "—";
+            return (
+              <button
+                key={s.id}
+                onClick={() => transport.seek(Math.max(0, at))}
+                title="Nhảy tới câu này"
+                style={{ textAlign: "left", border: `1px solid ${C.border}`, background: C.panel2, borderRadius: 7, padding: "7px 9px", cursor: "pointer", fontFamily: FONT }}
+              >
+                <div style={{ display: "flex", gap: 7, alignItems: "center", fontSize: 10, fontFamily: MONO, color: C.muted2, marginBottom: 3 }}>
+                  <span style={{ color: C.purpleLt }}>{fmt(at)}</span>
+                  <span style={{ padding: "0 5px", borderRadius: 4, background: C.panel3 }}>{s.speaker}</span>
+                </div>
+                <div style={{ fontSize: 12, color: text === "—" ? C.muted3 : "#fff", lineHeight: 1.35 }}>{text}</div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
 }
 
 function TrackVolume({ kind, value0, transport, onCommit }: { kind: "original" | "vn"; value0: number; transport: Transport; onCommit: (v: number) => void }) {

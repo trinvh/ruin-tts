@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { clipMediaUrl, type DubClip } from "../../studioApi";
 
-/** Mount each segment's audio this many seconds before it starts (preload). */
-const LOOKAHEAD = 1.5;
+/** Resolve a segment's media URL this many seconds before it starts (prefetch). */
+const LOOKAHEAD = 3;
 
 interface Props {
   clips: DubClip[];
@@ -13,23 +13,35 @@ interface Props {
 }
 
 /**
- * Plays the Vietnamese dub PER SEGMENT, straight from the `dub:tts` clips at
- * their timeline positions, instead of one pre-merged track. Dragging a segment
- * on the timeline therefore moves its voice in the preview too (the merged track
- * couldn't reflect that without a rebuild). Only clips near the playhead are
- * mounted, so a long video doesn't spin up hundreds of <audio> elements.
+ * Plays the Vietnamese dub PER SEGMENT from the `dub:tts` clips at their timeline
+ * positions, so dragging a segment moves its voice in the preview too. Uses a
+ * SINGLE <audio> element whose src swaps to the active segment — WKWebView caps
+ * how many media elements can load/play at once, so one element + the preview
+ * video is reliable where a per-segment element each was not (later segments
+ * silently failed to play). URLs are prefetched + cached so the swap is gapless.
+ * Overlapping segments fall back to the later one (the export still mixes both).
  */
 export function DubAudioLayer({ clips, time, playing, volume }: Props) {
-  const tts = clips.filter((c) => c.origin?.startsWith("dub:tts") && c.source);
-  const near = tts.filter(
-    (c) => time >= c.start_s - LOOKAHEAD && time < c.start_s + c.dur_s + 0.15,
-  );
-
+  const ref = useRef<HTMLAudioElement | null>(null);
+  const lastTime = useRef(time);
   const [urls, setUrls] = useState<Record<string, string>>({});
-  const key = near.map((c) => c.id).join(",");
+
+  const tts = clips.filter((c) => c.origin?.startsWith("dub:tts") && c.source);
+  // The segment under the playhead (last-starting one wins on overlap).
+  const active =
+    tts
+      .filter((c) => time >= c.start_s && time < c.start_s + c.dur_s)
+      .sort((a, b) => a.start_s - b.start_s)
+      .pop() ?? null;
+
+  // Prefetch URLs for the active + upcoming segments so the src swap is instant.
+  const soon = tts.filter((c) => time >= c.start_s - LOOKAHEAD && time < c.start_s + c.dur_s);
+  const soonKey = soon.map((c) => c.id).join(",");
   useEffect(() => {
     let alive = true;
-    Promise.all(near.map((c) => clipMediaUrl(c.id).then((u) => [c.id, u] as const))).then(
+    const missing = soon.filter((c) => !urls[c.id]);
+    if (!missing.length) return;
+    Promise.all(missing.map((c) => clipMediaUrl(c.id).then((u) => [c.id, u] as const))).then(
       (pairs) => {
         if (alive) setUrls((prev) => ({ ...prev, ...Object.fromEntries(pairs) }));
       },
@@ -38,59 +50,30 @@ export function DubAudioLayer({ clips, time, playing, volume }: Props) {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [soonKey]);
 
-  return (
-    <>
-      {near.map((c) => (
-        <TtsClip key={c.id} url={urls[c.id]} clip={c} time={time} playing={playing} volume={volume} />
-      ))}
-    </>
-  );
-}
+  const url = active ? urls[active.id] : undefined;
 
-function TtsClip({
-  url,
-  clip,
-  time,
-  playing,
-  volume,
-}: {
-  url?: string;
-  clip: DubClip;
-  time: number;
-  playing: boolean;
-  volume: number;
-}) {
-  const ref = useRef<HTMLAudioElement | null>(null);
-  const lastTime = useRef(time);
-  const inRange = time >= clip.start_s && time < clip.start_s + clip.dur_s;
+  // Drive the single element. Runs every render; only acts on start/seg-change/seek
+  // so smooth playback isn't interrupted.
   useEffect(() => {
     const a = ref.current;
-    if (a) a.volume = Math.max(0, Math.min(1, volume));
-  }, [volume]);
-  useEffect(() => {
-    const a = ref.current;
-    // A real SEEK = the timeline jumped (not the ~16ms/frame of smooth playback).
     const jumped = Math.abs(time - lastTime.current) > 0.35;
     lastTime.current = time;
     if (!a) return;
-    if (inRange && playing) {
-      const want = clip.in_s + (time - clip.start_s);
-      if (a.paused && !a.ended) {
-        // start: align once, then let it play freely
+    a.volume = Math.max(0, Math.min(1, volume));
+    if (active && playing && url) {
+      const want = active.in_s + (time - active.start_s);
+      // `src` is bound below; when `active` changes, url changes → the element
+      // reloads and `a.paused` flips true, so we (re)start it at `want`.
+      if (a.paused || jumped) {
         a.currentTime = Math.max(0, want);
         void a.play().catch(() => {});
-      } else if (jumped) {
-        // seek: realign (also un-pauses a finished/paused clip if back in range)
-        a.currentTime = Math.max(0, want);
-        if (a.paused) void a.play().catch(() => {});
       }
-      // else: playing smoothly → never touch currentTime (no stutter/dropout)
     } else if (!a.paused) {
       a.pause();
     }
-  }, [inRange, playing, time, clip.in_s, clip.start_s]);
-  if (!url) return null;
+  });
+
   return <audio ref={ref} src={url} preload="auto" />;
 }
