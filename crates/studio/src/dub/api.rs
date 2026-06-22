@@ -178,6 +178,8 @@ struct UpdateSettings {
     #[serde(default)]
     sub_bilingual: bool,
     #[serde(default = "default_true")]
+    sub_bg: bool,
+    #[serde(default = "default_true")]
     video_enabled: bool,
 }
 
@@ -249,6 +251,7 @@ async fn update_settings(
             b.sub_size.clamp(8.0, 120.0),
             &sanitize_hex_color(&b.sub_color),
             b.sub_bilingual,
+            b.sub_bg,
             b.video_enabled,
         )
         .await?;

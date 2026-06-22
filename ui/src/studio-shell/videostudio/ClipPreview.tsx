@@ -150,14 +150,21 @@ function ResizeHandle({ onDown }: { onDown: (e: React.PointerEvent) => void }) {
  *  Only realigns on start/seek so smooth playback isn't yanked. */
 function VideoClip({ url, clip, time, playing }: { url: string; clip: DubClip; time: number; playing: boolean }) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  const lastTime = useRef(time);
   useEffect(() => {
     const v = ref.current;
+    const jumped = Math.abs(time - lastTime.current) > 0.35;
+    lastTime.current = time;
     if (!v) return;
     const want = clip.in_s + (time - clip.start_s);
-    const needSeek = Math.abs(v.currentTime - want) > 0.3;
-    if (needSeek) v.currentTime = Math.max(0, want);
     if (playing) {
-      if (v.paused && (!v.ended || needSeek)) void v.play().catch(() => {});
+      if (v.paused && !v.ended) {
+        v.currentTime = Math.max(0, want);
+        void v.play().catch(() => {});
+      } else if (jumped) {
+        v.currentTime = Math.max(0, want);
+        if (v.paused) void v.play().catch(() => {});
+      }
     } else if (!v.paused) {
       v.pause();
     }
@@ -169,6 +176,7 @@ function VideoClip({ url, clip, time, playing }: { url: string; clip: DubClip; t
  *  Only realigns on start/seek (no per-frame currentTime write → no stutter). */
 function AudioClip({ url, clip, time, playing }: { url?: string; clip: DubClip; time: number; playing: boolean }) {
   const ref = useRef<HTMLAudioElement | null>(null);
+  const lastTime = useRef(time);
   const inRange = active(clip, time);
   useEffect(() => {
     const a = ref.current;
@@ -176,12 +184,18 @@ function AudioClip({ url, clip, time, playing }: { url?: string; clip: DubClip; 
   }, [clip.volume]);
   useEffect(() => {
     const a = ref.current;
+    const jumped = Math.abs(time - lastTime.current) > 0.35;
+    lastTime.current = time;
     if (!a) return;
     if (inRange && playing) {
       const want = clip.in_s + (time - clip.start_s);
-      const needSeek = Math.abs(a.currentTime - want) > 0.3;
-      if (needSeek) a.currentTime = Math.max(0, want);
-      if (a.paused && (!a.ended || needSeek)) void a.play().catch(() => {});
+      if (a.paused && !a.ended) {
+        a.currentTime = Math.max(0, want);
+        void a.play().catch(() => {});
+      } else if (jumped) {
+        a.currentTime = Math.max(0, want);
+        if (a.paused) void a.play().catch(() => {});
+      }
     } else if (!a.paused) {
       a.pause();
     }

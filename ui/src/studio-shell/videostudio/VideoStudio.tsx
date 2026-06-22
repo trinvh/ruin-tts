@@ -106,9 +106,9 @@ export function VideoStudio({ projectId, title: initialTitle }: Props) {
   // editor opens reflecting saved size/colour/bilingual values.
   useEffect(() => {
     if (!proj) return;
-    actions.seedSubStyle({ size: proj.sub_size, color: proj.sub_color, bilingual: proj.sub_bilingual });
+    actions.seedSubStyle({ size: proj.sub_size, color: proj.sub_color, bilingual: proj.sub_bilingual, bg: proj.sub_bg });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [proj?.sub_size, proj?.sub_color, proj?.sub_bilingual]);
+  }, [proj?.sub_size, proj?.sub_color, proj?.sub_bilingual, proj?.sub_bg]);
 
   const trackCtl: TrackCtl = {
     kindOf: trackAudioKind,

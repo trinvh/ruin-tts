@@ -675,13 +675,14 @@ impl Db {
         sub_size: f64,
         sub_color: &str,
         sub_bilingual: bool,
+        sub_bg: bool,
         video_enabled: bool,
     ) -> Result<()> {
         let (blur_x, blur_y, blur_w, blur_h) = blur_rect;
         sqlx::query(
             "UPDATE dub_projects SET name = ?, gemini_model = ?, original_volume = ?, vn_volume = ?, speed_cap = ?,
                burn_subtitles = ?, blur_subtitle = ?, blur_x = ?, blur_y = ?, blur_w = ?, blur_h = ?,
-               sub_y = ?, sub_size = ?, sub_color = ?, sub_bilingual = ?, video_enabled = ?, updated_at = datetime('now')
+               sub_y = ?, sub_size = ?, sub_color = ?, sub_bilingual = ?, sub_bg = ?, video_enabled = ?, updated_at = datetime('now')
              WHERE id = ?",
         )
         .bind(name)
@@ -699,6 +700,7 @@ impl Db {
         .bind(sub_size)
         .bind(sub_color)
         .bind(sub_bilingual as i64)
+        .bind(sub_bg as i64)
         .bind(video_enabled as i64)
         .bind(id)
         .execute(&self.pool)
@@ -1241,6 +1243,7 @@ fn dub_project_from_row(r: sqlx::sqlite::SqliteRow) -> crate::dub::DubProject {
         sub_size: r.get("sub_size"),
         sub_color: r.get("sub_color"),
         sub_bilingual: r.get::<i64, _>("sub_bilingual") != 0,
+        sub_bg: r.get::<i64, _>("sub_bg") != 0,
         video_enabled: r.get::<i64, _>("video_enabled") != 0,
         video_offset_s: r.get("video_offset_s"),
         vn_track_path: r.get("vn_track_path"),

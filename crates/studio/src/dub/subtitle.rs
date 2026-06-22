@@ -39,6 +39,8 @@ pub struct SubStyle<'a> {
     /// `#RRGGBB`.
     pub color: &'a str,
     pub bilingual: bool,
+    /// Draw a semi-transparent box behind the text (matches the preview box).
+    pub bg: bool,
 }
 
 /// `#RRGGBB` → ASS `&HAABBGGRR` (opaque). Falls back to white on bad input.
@@ -83,7 +85,15 @@ pub fn build_ass(events: &[SubEvent], style: &SubStyle) -> String {
     let color = ass_color(style.color);
     let margin_lr = ((PLAY_W as f64 * (1.0 - MAX_WIDTH_FRAC) / 2.0).round() as i32).max(0);
     let margin_v = (PLAY_H as f64 * MARGIN_V_FRAC).round() as i32;
-    let outline = (size * 0.08).round().max(2.0);
+    // A semi-transparent box (BorderStyle 4) when bg is on, else a thin text
+    // outline (BorderStyle 1). No drop shadow either way — the old thick outline
+    // + shadow read as too heavy. ASS alpha is inverted (00=opaque, FF=clear);
+    // &H80000000 ≈ a 50% black box, matching the preview's rgba(0,0,0,.5).
+    let (border_style, outline, back) = if style.bg {
+        (4, 1.0_f64, "&H80000000")
+    } else {
+        (1, (size * 0.055).round().max(1.5), "&H00000000")
+    };
 
     let mut out = String::new();
     out.push_str("[Script Info]\n");
@@ -95,7 +105,7 @@ pub fn build_ass(events: &[SubEvent], style: &SubStyle) -> String {
     out.push_str("[V4+ Styles]\n");
     out.push_str("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n");
     out.push_str(&format!(
-        "Style: Default,{FONT_NAME},{size},{color},&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,{outline},1,2,{margin_lr},{margin_lr},{margin_v},1\n\n",
+        "Style: Default,{FONT_NAME},{size},{color},&H000000FF,&H00000000,{back},0,0,0,0,100,100,0,0,{border_style},{outline},0,2,{margin_lr},{margin_lr},{margin_v},1\n\n",
     ));
 
     out.push_str("[Events]\n");
@@ -158,6 +168,7 @@ mod tests {
             size: 30.0,
             color: "#FFFFFF",
             bilingual: false,
+            bg: false,
         };
         let ass = build_ass(&events, &style);
         assert!(ass.contains("PlayResX: 1920"));
@@ -180,6 +191,7 @@ mod tests {
             size: 30.0,
             color: "#FFFFFF",
             bilingual: true,
+            bg: false,
         };
         let ass = build_ass(&events, &style);
         assert!(ass.contains("源\\NViệt")); // source, hard break, vietnamese
@@ -197,6 +209,7 @@ mod tests {
             size: 30.0,
             color: "#FFFFFF",
             bilingual: false,
+            bg: false,
         };
         let ass = build_ass(&events, &style);
         assert!(ass.contains("a\\{b\\}\\Nc"));

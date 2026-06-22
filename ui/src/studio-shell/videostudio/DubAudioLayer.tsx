@@ -63,6 +63,7 @@ function TtsClip({
   volume: number;
 }) {
   const ref = useRef<HTMLAudioElement | null>(null);
+  const lastTime = useRef(time);
   const inRange = time >= clip.start_s && time < clip.start_s + clip.dur_s;
   useEffect(() => {
     const a = ref.current;
@@ -70,19 +71,25 @@ function TtsClip({
   }, [volume]);
   useEffect(() => {
     const a = ref.current;
+    // A real SEEK = the timeline jumped (not the ~16ms/frame of smooth playback).
+    const jumped = Math.abs(time - lastTime.current) > 0.35;
+    lastTime.current = time;
     if (!a) return;
     if (inRange && playing) {
       const want = clip.in_s + (time - clip.start_s);
-      // Only (re)align on start / seek — never write currentTime mid-playback,
-      // which would re-buffer and cause stutter/dropouts.
-      const needSeek = Math.abs(a.currentTime - want) > 0.3;
-      if (needSeek) a.currentTime = Math.max(0, want);
-      // Don't restart a clip that already finished (audio shorter than the slot).
-      if (a.paused && (!a.ended || needSeek)) void a.play().catch(() => {});
+      if (a.paused && !a.ended) {
+        // start: align once, then let it play freely
+        a.currentTime = Math.max(0, want);
+        void a.play().catch(() => {});
+      } else if (jumped) {
+        // seek: realign (also un-pauses a finished/paused clip if back in range)
+        a.currentTime = Math.max(0, want);
+        if (a.paused) void a.play().catch(() => {});
+      }
+      // else: playing smoothly → never touch currentTime (no stutter/dropout)
     } else if (!a.paused) {
       a.pause();
     }
-    // `time` is a dep so we react to seeks; the body no-ops during smooth play.
   }, [inRange, playing, time, clip.in_s, clip.start_s]);
   if (!url) return null;
   return <audio ref={ref} src={url} preload="auto" />;

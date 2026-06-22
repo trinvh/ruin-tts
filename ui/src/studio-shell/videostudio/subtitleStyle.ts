@@ -21,11 +21,11 @@ export function subFontSize(subSize: number): string {
   return `calc(${(pctOfHeight * 100).toFixed(3)} * 1cqh)`;
 }
 
-/** A crisp dark outline approximating libass `Outline` (BorderStyle 1). */
+/** A thin dark outline approximating libass `Outline` (BorderStyle 1), kept
+ *  light to match the slimmer ASS outline. */
 export const SUB_OUTLINE =
-  "0 0 calc(.18*1cqh) #000, 0 0 calc(.18*1cqh) #000, " +
-  "calc(.12*1cqh) calc(.12*1cqh) calc(.18*1cqh) #000, " +
-  "calc(-.12*1cqh) calc(-.12*1cqh) calc(.18*1cqh) #000";
+  "0 0 calc(.12*1cqh) #000, calc(.08*1cqh) calc(.08*1cqh) calc(.1*1cqh) #000, " +
+  "calc(-.08*1cqh) calc(-.08*1cqh) calc(.1*1cqh) #000";
 
 /** Wrapper box for the subtitle block: bottom-centred, wrapped within margins. */
 export function subBoxStyle(): CSSProperties {

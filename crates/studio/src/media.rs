@@ -746,6 +746,9 @@ pub struct ClipArg<'a> {
     pub w: f64,
     pub opacity: f64,
     pub text: Option<&'a str>,
+    /// For a video clip: does its source carry an audio stream to mix in (e.g.
+    /// the original/background audio)? Ignored for other kinds.
+    pub audio: bool,
 }
 
 /// Escape a string for use inside a `drawtext=text='…'` value. ffmpeg's drawtext
@@ -850,6 +853,18 @@ pub fn compose_export_args(
                     y = c.y,
                 ));
                 base = format!("vc{i}");
+                // Mix the video's own audio (e.g. the original/background track)
+                // at its clip volume, delayed to its timeline start.
+                if c.audio && c.volume > 0.0 {
+                    let ms = (start * 1000.0).round() as i64;
+                    chains.push(format!(
+                        "[{idx}:a]atrim=start={in_s:.3}:duration={dur:.3},asetpts=PTS-STARTPTS,volume={vol:.3},adelay={ms}:all=1[va{i}]",
+                        in_s = c.in_s.max(0.0),
+                        dur = c.dur.max(0.0),
+                        vol = c.volume.max(0.0),
+                    ));
+                    audio_labels.push(format!("va{i}"));
+                }
             }
             ClipKind::Image => {
                 let Some(idx) = input_idx[i] else { continue };
@@ -973,6 +988,26 @@ pub fn ffprobe_duration_args(path: &Path) -> Vec<String> {
         "default=noprint_wrappers=1:nokey=1".into(),
         s(path),
     ]
+}
+
+/// Whether `path` has at least one audio stream (so the export knows to mix the
+/// original/background audio). Best-effort: false if ffprobe can't be run.
+pub async fn has_audio_stream(path: &Path) -> bool {
+    let out = tokio::process::Command::new(ffprobe_bin())
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(s(path))
+        .output()
+        .await;
+    matches!(out, Ok(o) if !String::from_utf8_lossy(&o.stdout).trim().is_empty())
 }
 
 /// Parse the duration (seconds) from `ffprobe` stdout.
@@ -1467,6 +1502,7 @@ mod tests {
             w: 0.5,
             opacity: 1.0,
             text: None,
+        audio: false,
         }];
         let a = compose_export_args(&clips, 6.0, (1000, 600), &p("o.mp4"), true, None);
         let j = a.join(" ");
@@ -1497,6 +1533,7 @@ mod tests {
             w: 1.0,
             opacity: 1.0,
             text: None,
+        audio: false,
         }];
         let j = compose_export_args(&clips, 4.0, (1280, 720), &p("o.mp4"), true, None).join(" ");
         assert!(j.contains(
@@ -1525,6 +1562,7 @@ mod tests {
                 w: 0.3,
                 opacity: 0.5,
                 text: None,
+            audio: false,
             },
             ClipArg {
                 kind: ClipKind::Text,
@@ -1538,6 +1576,7 @@ mod tests {
                 w: 1.0,
                 opacity: 1.0,
                 text: Some("Xin chào: 100%"),
+            audio: false,
             },
         ];
         let j = compose_export_args(&clips, 6.0, (1000, 1000), &p("o.mp4"), true, None).join(" ");
@@ -1599,6 +1638,7 @@ mod tests {
                 w: 1.0,
                 opacity: 1.0,
                 text: None,
+            audio: false,
             },
             ClipArg {
                 kind: ClipKind::Audio,
@@ -1612,6 +1652,7 @@ mod tests {
                 w: 1.0,
                 opacity: 1.0,
                 text: None,
+            audio: false,
             },
             // a text/subtitle clip — must NOT break the render even without drawtext
             ClipArg {
@@ -1626,6 +1667,7 @@ mod tests {
                 w: 1.0,
                 opacity: 1.0,
                 text: Some("Xin chào"),
+            audio: false,
             },
         ];
         let text_ok = has_filter("drawtext").await;
@@ -1676,6 +1718,7 @@ mod tests {
                 size: 30.0,
                 color: "#FFFFFF",
                 bilingual: false,
+                bg: false,
             },
         );
         let ass_path = dir.join("subs.ass");
@@ -1698,6 +1741,7 @@ mod tests {
             w: 1.0,
             opacity: 1.0,
             text: None,
+        audio: false,
         }];
         let burn = SubtitleBurn {
             ass: &ass_path,
@@ -1726,6 +1770,7 @@ mod tests {
                 w: 0.3,
                 opacity: 1.0,
                 text: None,
+            audio: false,
             },
             ClipArg {
                 kind: ClipKind::Text,
@@ -1739,6 +1784,7 @@ mod tests {
                 w: 1.0,
                 opacity: 1.0,
                 text: Some("Xin chào"),
+            audio: false,
             },
         ];
         // drawtext available → the subtitle is drawn.
@@ -1772,6 +1818,7 @@ mod tests {
             w: 1.0,
             opacity: 1.0,
             text: Some("Xin chào"),
+        audio: false,
         }];
         let burn = SubtitleBurn {
             ass: &ass,
@@ -1802,6 +1849,7 @@ mod tests {
                 w: 1.0,
                 opacity: 1.0,
                 text: None,
+            audio: false,
             },
             ClipArg {
                 kind: ClipKind::Video,
@@ -1815,6 +1863,7 @@ mod tests {
                 w: 0.35,
                 opacity: 1.0,
                 text: None,
+            audio: false,
             },
         ];
         let j = compose_export_args(&clips, 10.0, (1920, 1080), &p("o.mp4"), true, None).join(" ");

@@ -667,6 +667,19 @@ async fn export_composited(
     let mut ordered: Vec<&crate::dub::DubClip> = clips.iter().collect();
     ordered.sort_by_key(|c| c.track);
 
+    // Probe each video source once for an audio stream, so its original/background
+    // audio is mixed into the export (not just the picture).
+    let mut has_audio: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    for c in &ordered {
+        if c.kind == "video" {
+            if let Some(src) = c.source.as_deref() {
+                if !has_audio.contains_key(src) {
+                    has_audio.insert(src.to_string(), media::has_audio_stream(Path::new(src)).await);
+                }
+            }
+        }
+    }
+
     // Subtitles: burn the dub `text` lines with libass (word-wrapping + bundled
     // Vietnamese font, matching the preview) when burning is on and the ffmpeg
     // build has libass. Otherwise drawtext is the fallback; when subtitles are
@@ -694,6 +707,11 @@ async fn export_composited(
             w: c.w,
             opacity: c.opacity,
             text: c.text.as_deref(),
+            audio: c.kind == "video"
+                && c.source
+                    .as_deref()
+                    .and_then(|s| has_audio.get(s).copied())
+                    .unwrap_or(false),
         })
         .collect();
 
@@ -716,6 +734,7 @@ async fn export_composited(
             size: project.sub_size,
             color: &project.sub_color,
             bilingual: project.sub_bilingual,
+            bg: project.sub_bg,
         };
         let ass = crate::dub::subtitle::build_ass(&events, &style);
         let ass_path = dir.join("subs.ass");

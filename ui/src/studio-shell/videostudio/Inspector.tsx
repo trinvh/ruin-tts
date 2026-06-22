@@ -186,7 +186,7 @@ export function Inspector({ state, actions, dub, transport, trackCtl }: Props) {
             </div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
               <span style={{ fontSize: 12, color: C.steel }}>Nền chữ</span>
-              <Toggle on={state.subStyle.bg} onClick={actions.toggleSubBg} />
+              <Toggle on={state.subStyle.bg} onClick={() => { actions.toggleSubBg(); void dub.patchSettings({ sub_bg: !state.subStyle.bg }); }} />
             </div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div>

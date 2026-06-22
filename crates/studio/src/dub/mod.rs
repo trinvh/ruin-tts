@@ -51,6 +51,9 @@ pub struct DubProject {
     pub sub_color: String,
     /// Render the source text above the Vietnamese (two lines per cue).
     pub sub_bilingual: bool,
+    /// Draw a semi-transparent background box behind the subtitle (matches the
+    /// preview's box).
+    pub sub_bg: bool,
     /// Video track enabled. When off, the editor previews audio-only and the
     /// export produces an audio file instead of a muxed video.
     pub video_enabled: bool,

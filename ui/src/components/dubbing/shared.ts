@@ -22,6 +22,7 @@ export function settingsOf(p: DubProject, over?: Partial<DubSettings>): DubSetti
     sub_size: p.sub_size,
     sub_color: p.sub_color,
     sub_bilingual: p.sub_bilingual,
+    sub_bg: p.sub_bg,
     video_enabled: p.video_enabled,
     ...over,
   };
