@@ -466,6 +466,17 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
         .db
         .clear_dub_field(project_id, "export_path")
         .await?;
+
+    // Clip-driven timeline: refresh the `dub:*` clips, then if any clip exists,
+    // render the whole timeline with the generalized compositor and return —
+    // bypassing the dub-specific mux path below.
+    crate::dub::compose::compose_clips(services, project_id).await?;
+    let clips = services.db.list_dub_clips(project_id).await?;
+    if !clips.is_empty() {
+        export_composited(services, project_id, &clips).await?;
+        return Ok(());
+    }
+
     let vn = project
         .vn_track_path
         .clone()
@@ -595,6 +606,78 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
     ))
     .await
     .context("ghép video tiếng Việt")?;
+    services
+        .db
+        .set_dub_field(project_id, "export_path", &out.to_string_lossy())
+        .await?;
+    Ok(())
+}
+
+/// Render the timeline from `dub_clips` with the generalized compositor and set
+/// `export_path`. Resolves each clip's source to a path, computes the total
+/// timeline length from the clips, and probes the first video clip for the frame
+/// size (falling back to 1080p).
+async fn export_composited(
+    services: &Services,
+    project_id: &str,
+    clips: &[crate::dub::DubClip],
+) -> Result<()> {
+    let dir = project_dir(services, project_id);
+    ensure_dir(&dir).await?;
+
+    // Total length = furthest clip end on the timeline.
+    let total_s = clips
+        .iter()
+        .map(|c| c.start_s + c.dur_s)
+        .fold(0.0_f64, f64::max);
+
+    // Frame size from the first video clip's source (else 1080p).
+    let frame = {
+        let first_video = clips
+            .iter()
+            .find(|c| c.kind == "video" && c.source.is_some())
+            .and_then(|c| c.source.as_deref());
+        match first_video {
+            Some(src) => media::probe_video_dimensions(Path::new(src))
+                .await
+                .unwrap_or((1920, 1080)),
+            None => (1920, 1080),
+        }
+    };
+
+    let kind = |k: &str| match k {
+        "video" => media::ClipKind::Video,
+        "audio" => media::ClipKind::Audio,
+        "image" => media::ClipKind::Image,
+        _ => media::ClipKind::Text,
+    };
+    // Composite in track order (ascending): higher track = on top, drawn last.
+    let mut ordered: Vec<&crate::dub::DubClip> = clips.iter().collect();
+    ordered.sort_by_key(|c| c.track);
+
+    let clip_args: Vec<media::ClipArg> = ordered
+        .iter()
+        .map(|c| media::ClipArg {
+            kind: kind(&c.kind),
+            source: c.source.as_deref().map(Path::new),
+            start: c.start_s,
+            dur: c.dur_s,
+            in_s: c.in_s,
+            volume: c.volume,
+            x: c.x,
+            y: c.y,
+            w: c.w,
+            opacity: c.opacity,
+            text: c.text.as_deref(),
+        })
+        .collect();
+
+    let out = dir.join("export.mp4");
+    media::run_ffmpeg(&media::compose_export_args(
+        &clip_args, total_s, frame, &out,
+    ))
+    .await
+    .context("dựng timeline (compositing)")?;
     services
         .db
         .set_dub_field(project_id, "export_path", &out.to_string_lossy())

@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVoices, type Voice } from "../../api";
 import {
   cancelDub,
+  composeClips,
+  createClip,
   createOverlay,
+  deleteClip,
   deleteOverlay,
   dubVideoUrl,
   fileUrl,
@@ -13,9 +16,11 @@ import {
   setDubSegmentOffset,
   setDubSpeakerVoice,
   setDubVideoOffset,
+  updateClip,
   updateDubSegment,
   updateDubSettings,
   updateOverlay,
+  type DubClipGeo,
   type DubDetail,
   type DubMediaInfo,
   type DubOverlay,
@@ -81,6 +86,14 @@ export interface DubProjectHook {
   setSegmentOffset: (segId: string, offsetS: number) => Promise<void>;
   /** Video lead-in (seconds of empty space before the video). */
   setVideoOffset: (offsetS: number) => Promise<void>;
+  /** Clip-based timeline (dub_clips). */
+  clips: DubDetail["clips"];
+  /** Update a user clip's geometry/timing. */
+  patchClip: (cid: string, geo: DubClipGeo) => Promise<void>;
+  /** Add a media clip from an uploaded file (kind inferred by the caller). */
+  addClip: (fields: Record<string, string | number>, file?: Blob) => Promise<void>;
+  /** Remove a clip. */
+  removeClip: (cid: string) => Promise<void>;
 }
 
 /** Real video-dubbing project state: loads + polls a project, exposes the pipeline. */
@@ -303,6 +316,54 @@ export function useDubProject(id: string): DubProjectHook {
     },
     [id, refresh],
   );
+  const patchClip = useCallback(
+    async (cid: string, geo: DubClipGeo) => {
+      try {
+        await updateClip(cid, geo);
+        await refresh();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [refresh],
+  );
+  const addClip = useCallback(
+    async (fields: Record<string, string | number>, file?: Blob) => {
+      try {
+        await createClip(id, fields, file);
+        await refresh();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [id, refresh],
+  );
+  const removeClip = useCallback(
+    async (cid: string) => {
+      try {
+        await deleteClip(cid);
+        await refresh();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [refresh],
+  );
+
+  // Back-fill the clip model on first open: if the project has analysed content
+  // but no clips yet, generate them from the dub data once.
+  const composed = useRef("");
+  useEffect(() => {
+    const d = detail;
+    if (!d) return;
+    if (d.clips.length > 0) return;
+    const hasContent = d.segments.length > 0 || !!d.project.video_path;
+    if (!hasContent || composed.current === id) return;
+    composed.current = id;
+    composeClips(id)
+      .then(() => refresh())
+      .catch(() => {});
+  }, [detail, id, refresh]);
 
   const segments = detail?.segments ?? [];
   // Engine presets + on-disk clones (bundled voice pack + user clones). Clones
@@ -353,5 +414,9 @@ export function useDubProject(id: string): DubProjectHook {
     removeOverlay,
     setSegmentOffset,
     setVideoOffset,
+    clips: detail?.clips ?? [],
+    patchClip,
+    addClip,
+    removeClip,
   };
 }

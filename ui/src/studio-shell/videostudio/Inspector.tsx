@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { C, FONT, MONO } from "../theme";
 import { Icon, type IconName } from "../icons";
 import { SUBC, trackLabel } from "./constants";
-import { segIdOfClip } from "./seed";
 import { trackAudioKind, type TrackCtl } from "./trackmap";
 import type { StudioActions, StudioState } from "./useStudio";
 import type { DubProjectHook } from "./useDubProject";
@@ -61,7 +60,12 @@ export function Inspector({ state, actions, dub, transport, trackCtl }: Props) {
   const isTrack = !!state.sel?.startsWith("track:");
   const trackKey = isTrack ? state.sel!.slice(6) : null;
   const sel = !isTrack ? (state.clips.find((c: Clip) => c.id === state.sel) ?? null) : null;
-  const subSegId = sel && sel.type === "sub" && sel.id.startsWith("svi_") ? segIdOfClip(sel.id) : null;
+  // The selected clip's backing dub_clip (for routing edits like subtitle text).
+  const selClip = sel ? dub.detail?.clips.find((c) => c.id === sel.id) : undefined;
+  const subSegId =
+    sel && sel.type === "sub" && selClip?.origin.startsWith("dub:sub:")
+      ? selClip.origin.slice("dub:sub:".length)
+      : null;
   const commitSub = (text: string) => {
     if (!subSegId) return;
     const seg = dub.detail?.segments.find((s) => s.id === subSegId);

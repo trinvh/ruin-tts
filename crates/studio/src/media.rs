@@ -721,6 +721,215 @@ pub fn export_video_args(video: &Path, voice: &Path, out: &Path, opts: &ExportOp
     args
 }
 
+/// The kind of a timeline clip fed to [`compose_export_args`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipKind {
+    Video,
+    Audio,
+    Image,
+    Text,
+}
+
+/// One clip on the general compositing timeline. Geometry (`x`/`y`/`w`/`opacity`)
+/// is fractional (resolution-independent); `start`/`dur` place it on the timeline,
+/// `in_s` trims the in-point inside the source media. `text` is only used for
+/// [`ClipKind::Text`].
+pub struct ClipArg<'a> {
+    pub kind: ClipKind,
+    pub source: Option<&'a Path>,
+    pub start: f64,
+    pub dur: f64,
+    pub in_s: f64,
+    pub volume: f64,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub opacity: f64,
+    pub text: Option<&'a str>,
+}
+
+/// Escape a string for use inside a `drawtext=text='…'` value. ffmpeg's drawtext
+/// reads the value after the filtergraph tokenizer, so backslashes, colons, and
+/// single quotes must be escaped (and `%`, which drawtext expands).
+fn escape_drawtext(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            ':' => out.push_str("\\:"),
+            '%' => out.push_str("\\%"),
+            // Newlines would break the single-line drawtext value → use a space.
+            '\n' | '\r' => out.push(' '),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Build a generalized compositing-export command from timeline `clips` over a
+/// black canvas of `frame` size spanning `total_s` seconds. Video/image clips are
+/// composited in input order (callers sort by track so higher tracks land on top);
+/// audio clips are delayed to their start and mixed; text clips are drawn over the
+/// running video via `drawtext`. The output is H.264 + AAC, bounded to `total_s`.
+///
+/// Input indexing: the black base canvas is the lavfi input 0; then every clip
+/// that needs a file input (video/image/audio) is added in iteration order and
+/// tracks its own `[N:…]` index. Text clips consume no input.
+pub fn compose_export_args(
+    clips: &[ClipArg],
+    total_s: f64,
+    frame: (u32, u32),
+    out: &Path,
+) -> Vec<String> {
+    let (fw, fh) = frame;
+    let total = total_s.max(0.1);
+
+    // Input 0: the black base canvas (lavfi). Real file inputs follow.
+    let mut args: Vec<String> = vec![
+        "-y".into(),
+        "-f".into(),
+        "lavfi".into(),
+        "-t".into(),
+        format!("{total:.3}"),
+        "-i".into(),
+        format!("color=c=black:s={fw}x{fh}:r=30:d={total:.3}"),
+    ];
+
+    // Assign a real ffmpeg input index to each clip needing a file. Text clips get
+    // None. The base canvas is index 0, so file inputs start at 1.
+    let mut input_idx: Vec<Option<usize>> = Vec::with_capacity(clips.len());
+    let mut next_idx = 1usize;
+    for c in clips {
+        match c.kind {
+            ClipKind::Video | ClipKind::Image | ClipKind::Audio => {
+                if let Some(src) = c.source {
+                    args.push("-i".into());
+                    args.push(s(src));
+                    input_idx.push(Some(next_idx));
+                    next_idx += 1;
+                } else {
+                    input_idx.push(None);
+                }
+            }
+            ClipKind::Text => input_idx.push(None),
+        }
+    }
+
+    let mut chains: Vec<String> = Vec::new();
+    // The running base video label, starting at the lavfi canvas.
+    let mut base = "0:v".to_string();
+    let mut audio_labels: Vec<String> = Vec::new();
+
+    for (i, c) in clips.iter().enumerate() {
+        let start = c.start.max(0.0);
+        let end = start + c.dur.max(0.0);
+        let enable = format!("enable='between(t,{start:.3},{end:.3})'");
+        match c.kind {
+            ClipKind::Video => {
+                let Some(idx) = input_idx[i] else { continue };
+                let sw = ((fw as f64 * c.w).round() as i64).max(2);
+                chains.push(format!(
+                    "[{idx}:v]trim=start={in_s:.3}:duration={dur:.3},setpts=PTS-STARTPTS,scale={sw}:-2[v{i}]",
+                    in_s = c.in_s.max(0.0),
+                    dur = c.dur.max(0.0),
+                ));
+                chains.push(format!(
+                    "[{base}][v{i}]overlay=W*{x:.4}:H*{y:.4}:{enable}[vc{i}]",
+                    x = c.x,
+                    y = c.y,
+                ));
+                base = format!("vc{i}");
+            }
+            ClipKind::Image => {
+                let Some(idx) = input_idx[i] else { continue };
+                let sw = ((fw as f64 * c.w).round() as i64).max(2);
+                chains.push(format!(
+                    "[{idx}:v]scale={sw}:-1,format=rgba,colorchannelmixer=aa={op:.3}[im{i}]",
+                    op = c.opacity.clamp(0.0, 1.0),
+                ));
+                chains.push(format!(
+                    "[{base}][im{i}]overlay=W*{x:.4}:H*{y:.4}:{enable}[vc{i}]",
+                    x = c.x,
+                    y = c.y,
+                ));
+                base = format!("vc{i}");
+            }
+            ClipKind::Text => {
+                let Some(text) = c.text else { continue };
+                if text.trim().is_empty() {
+                    continue;
+                }
+                // Default font size scaled from the frame height (~4.5% of height).
+                let sz = ((fh as f64 * 0.045).round() as i64).max(12);
+                chains.push(format!(
+                    "[{base}]drawtext=text='{txt}':x=(w-text_w)/2:y=h*0.85:fontsize={sz}:fontcolor=white:borderw=2:{enable}[vc{i}]",
+                    txt = escape_drawtext(text),
+                ));
+                base = format!("vc{i}");
+            }
+            ClipKind::Audio => {
+                let Some(idx) = input_idx[i] else { continue };
+                let ms = (start * 1000.0).round() as i64;
+                chains.push(format!(
+                    "[{idx}:a]atrim=start={in_s:.3}:duration={dur:.3},asetpts=PTS-STARTPTS,volume={vol:.3},adelay={ms}:all=1[a{i}]",
+                    in_s = c.in_s.max(0.0),
+                    dur = c.dur.max(0.0),
+                    vol = c.volume.max(0.0),
+                ));
+                audio_labels.push(format!("a{i}"));
+            }
+        }
+    }
+
+    // Audio: mix all audio clips, or generate silence so the output always has an
+    // audio track.
+    let audio_out = if audio_labels.is_empty() {
+        // Append an anullsrc lavfi input for the silent track. Its input index is
+        // `next_idx` (the file inputs occupied 1..next_idx).
+        args.extend([
+            "-f".into(),
+            "lavfi".into(),
+            "-t".into(),
+            format!("{total:.3}"),
+            "-i".into(),
+            "anullsrc=r=48000:cl=stereo".into(),
+        ]);
+        chains.push(format!("[{next_idx}:a]anull[a]"));
+        "[a]".to_string()
+    } else {
+        let joined: String = audio_labels.iter().map(|l| format!("[{l}]")).collect();
+        chains.push(format!(
+            "{joined}amix=inputs={n}:normalize=0:duration=longest[a]",
+            n = audio_labels.len(),
+        ));
+        "[a]".to_string()
+    };
+
+    let final_video = format!("[{base}]");
+    let fc = chains.join(";");
+    args.extend([
+        "-filter_complex".into(),
+        fc,
+        "-map".into(),
+        final_video,
+        "-map".into(),
+        audio_out,
+        "-c:v".into(),
+        "libx264".into(),
+        "-pix_fmt".into(),
+        "yuv420p".into(),
+        "-c:a".into(),
+        "aac".into(),
+        "-b:a".into(),
+        "192k".into(),
+        "-t".into(),
+        format!("{total:.3}"),
+        s(out),
+    ]);
+    args
+}
+
 pub fn ffprobe_duration_args(path: &Path) -> Vec<String> {
     vec![
         "-v".into(),
@@ -1191,5 +1400,162 @@ mod tests {
         assert!(j.contains("-c:s mov_text"));
         assert!(j.contains("-map 2:0")); // the srt is the 3rd input
         assert!(!j.contains("subtitles=")); // not a filter burn
+    }
+
+    #[test]
+    fn compose_export_builds_black_base_and_bounds_length() {
+        let clips: Vec<ClipArg> = vec![];
+        let a = compose_export_args(&clips, 12.0, (1920, 1080), &p("o.mp4"));
+        let j = a.join(" ");
+        // black base canvas as lavfi input 0
+        assert!(j.contains("color=c=black:s=1920x1080:r=30:d=12.000"));
+        // no audio clips → silence so the output still has an audio track
+        assert!(j.contains("anullsrc=r=48000:cl=stereo"));
+        assert!(j.contains("[1:a]anull[a]"));
+        // bounded length + h264/aac encode
+        assert!(j.contains("-t 12.000"));
+        assert!(j.contains("-c:v libx264"));
+        assert!(j.contains("-pix_fmt yuv420p"));
+        assert!(j.contains("-c:a aac"));
+    }
+
+    #[test]
+    fn compose_export_video_clip_trims_scales_and_overlays() {
+        let src = p("clip.mp4");
+        let clips = vec![ClipArg {
+            kind: ClipKind::Video,
+            source: Some(&src),
+            start: 2.0,
+            dur: 3.0,
+            in_s: 1.5,
+            volume: 1.0,
+            x: 0.25,
+            y: 0.1,
+            w: 0.5,
+            opacity: 1.0,
+            text: None,
+        }];
+        let a = compose_export_args(&clips, 6.0, (1000, 600), &p("o.mp4"));
+        let j = a.join(" ");
+        // video input is index 1 (base canvas is 0)
+        assert!(
+            j.contains("[1:v]trim=start=1.500:duration=3.000,setpts=PTS-STARTPTS,scale=500:-2[v0]")
+        );
+        // overlaid onto the base with a time gate
+        assert!(
+            j.contains("[0:v][v0]overlay=W*0.2500:H*0.1000:enable='between(t,2.000,5.000)'[vc0]")
+        );
+        // final video map is the running base [vc0]
+        assert!(j.contains("-map [vc0]"));
+    }
+
+    #[test]
+    fn compose_export_audio_clip_delays_and_mixes() {
+        let src = p("voice.wav");
+        let clips = vec![ClipArg {
+            kind: ClipKind::Audio,
+            source: Some(&src),
+            start: 1.25,
+            dur: 2.0,
+            in_s: 0.0,
+            volume: 0.8,
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            opacity: 1.0,
+            text: None,
+        }];
+        let j = compose_export_args(&clips, 4.0, (1280, 720), &p("o.mp4")).join(" ");
+        assert!(j.contains(
+            "[1:a]atrim=start=0.000:duration=2.000,asetpts=PTS-STARTPTS,volume=0.800,adelay=1250:all=1[a0]"
+        ));
+        // single audio clip is still mixed (over the base canvas's absence) → amix of 1
+        assert!(j.contains("[a0]amix=inputs=1:normalize=0:duration=longest[a]"));
+        assert!(j.contains("-map [a]"));
+        // no extra silence input when audio clips exist
+        assert!(!j.contains("anullsrc"));
+    }
+
+    #[test]
+    fn compose_export_image_applies_opacity_and_text_drawtext() {
+        let img = p("banner.png");
+        let clips = vec![
+            ClipArg {
+                kind: ClipKind::Image,
+                source: Some(&img),
+                start: 0.0,
+                dur: 5.0,
+                in_s: 0.0,
+                volume: 1.0,
+                x: 0.05,
+                y: 0.8,
+                w: 0.3,
+                opacity: 0.5,
+                text: None,
+            },
+            ClipArg {
+                kind: ClipKind::Text,
+                source: None,
+                start: 1.0,
+                dur: 2.0,
+                in_s: 0.0,
+                volume: 1.0,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                opacity: 1.0,
+                text: Some("Xin chào: 100%"),
+            },
+        ];
+        let j = compose_export_args(&clips, 6.0, (1000, 1000), &p("o.mp4")).join(" ");
+        // image: scaled to fractional width, alpha from opacity, overlaid with gate
+        assert!(j.contains("[1:v]scale=300:-1,format=rgba,colorchannelmixer=aa=0.500[im0]"));
+        assert!(
+            j.contains("[0:v][im0]overlay=W*0.0500:H*0.8000:enable='between(t,0.000,5.000)'[vc0]")
+        );
+        // text: drawn on the running base, colon + percent escaped
+        assert!(j.contains("drawtext=text='Xin chào\\: 100\\%'"));
+        assert!(j.contains("enable='between(t,1.000,3.000)'[vc1]"));
+        assert!(j.contains("-map [vc1]"));
+    }
+
+    #[test]
+    fn compose_export_multi_video_chains_overlays_in_order() {
+        let a0 = p("base.mp4");
+        let a1 = p("pip.mp4");
+        let clips = vec![
+            ClipArg {
+                kind: ClipKind::Video,
+                source: Some(&a0),
+                start: 0.0,
+                dur: 10.0,
+                in_s: 0.0,
+                volume: 1.0,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                opacity: 1.0,
+                text: None,
+            },
+            ClipArg {
+                kind: ClipKind::Video,
+                source: Some(&a1),
+                start: 0.0,
+                dur: 10.0,
+                in_s: 0.0,
+                volume: 1.0,
+                x: 0.6,
+                y: 0.6,
+                w: 0.35,
+                opacity: 1.0,
+                text: None,
+            },
+        ];
+        let j = compose_export_args(&clips, 10.0, (1920, 1080), &p("o.mp4")).join(" ");
+        // first video overlays onto the lavfi base, second overlays onto the result
+        assert!(j.contains("[0:v][v0]overlay=W*0.0000:H*0.0000:"));
+        assert!(j.contains("[vc0][v1]overlay=W*0.6000:H*0.6000:"));
+        // the last one is the mapped output
+        assert!(j.contains("-map [vc1]"));
     }
 }

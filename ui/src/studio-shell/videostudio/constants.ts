@@ -78,17 +78,22 @@ export function bars(seed: number, n: number): { h: number }[] {
 export const TRACK_ORDER: Record<string, number> = { V1: 0, IMG: 1, A1: 2, A2: 3, TTS: 4, SZH: 5, SVI: 6 };
 
 export function trackLabel(k: string, tachDone: boolean): string {
-  return (
-    {
-      V1: "V1 · Video",
-      IMG: "Ảnh",
-      A1: tachDone ? "Giọng gốc" : "Âm thanh",
-      A2: "Nhạc nền",
-      TTS: "Lồng tiếng Việt",
-      SZH: "Phụ đề gốc",
-      SVI: "Phụ đề Việt",
-    }[k] ?? k
-  );
+  const known: Record<string, string> = {
+    V1: "V1 · Video",
+    IMG: "Ảnh",
+    A1: tachDone ? "Giọng gốc" : "Âm thanh",
+    A2: "Nhạc nền",
+    TTS: "Lồng tiếng Việt",
+    SZH: "Phụ đề gốc",
+    SVI: "Phụ đề Việt",
+  };
+  if (known[k]) return known[k];
+  const m = /^(UV|UA|UI|UT)(\d+)$/.exec(k); // user-added layers
+  if (m) {
+    const kind = { UV: "Video", UA: "Âm thanh", UI: "Ảnh", UT: "Văn bản" }[m[1]] ?? "Lớp";
+    return `${kind} ${Number(m[2]) + 1}`;
+  }
+  return k;
 }
 
 export function trackDot(k: string): string {

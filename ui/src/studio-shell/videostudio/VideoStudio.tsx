@@ -4,7 +4,7 @@ import { useStudio } from "./useStudio";
 import { useDubProject } from "./useDubProject";
 import { useTransport } from "./useTransport";
 import { useEditorHistory } from "./useEditorHistory";
-import { buildClips, clipSignature } from "./seed";
+import { clipsToEditor, clipsSignature } from "./clipMap";
 import { trackAudioKind, type TrackCtl } from "./trackmap";
 import { TopBar } from "./TopBar";
 import { LeftPanel } from "./LeftPanel";
@@ -29,28 +29,35 @@ interface Props {
  */
 export function VideoStudio({ projectId, title: initialTitle }: Props) {
   const dub = useDubProject(projectId);
-  // Trimming/moving an overlay clip on the timeline persists its time range.
+  // Drag/trim of a timeline clip routes to the right persistence by its origin:
+  // a dub clip persists on its dub entity (so compose keeps it in sync); a user
+  // clip persists directly.
   const onTrimCommit = useCallback(
     (clipId: string, start: number, dur: number) => {
-      // Moving the video clip = lead-in (empty space before the video starts).
-      if (clipId === "vid") {
+      const c = dub.detail?.clips.find((x) => x.id === clipId);
+      if (!c) return;
+      const o = c.origin;
+      if (o.startsWith("dub:video")) {
         void dub.setVideoOffset(Math.max(0, start));
         return;
       }
-      // Banner overlay: drag/trim sets its time range.
-      if (clipId.startsWith("ovl_")) {
-        const oid = clipId.slice(4);
-        const o = dub.overlays.find((v) => v.id === oid);
-        if (o) void dub.patchOverlay(oid, { start_s: start, end_s: start + dur, x: o.x, y: o.y, w: o.w, opacity: o.opacity });
+      if (o.startsWith("dub:banner:")) {
+        const ovId = o.slice("dub:banner:".length);
+        const ov = dub.overlays.find((v) => v.id === ovId);
+        if (ov) void dub.patchOverlay(ovId, { start_s: start, end_s: start + dur, x: ov.x, y: ov.y, w: ov.w, opacity: ov.opacity });
         return;
       }
-      // Dub line (subtitle / TTS clip): moving it shifts the segment by an offset
-      // (duration is fixed, so only the new start matters).
-      const m = /^(?:svi|szh|tts)_(.+)$/.exec(clipId);
+      const m = /^dub:(?:tts|sub):(.+)$/.exec(o);
       if (m) {
         const seg = dub.detail?.segments.find((s) => s.id === m[1]);
         if (seg) void dub.setSegmentOffset(seg.id, start - seg.start_s);
+        return;
       }
+      // user clip → persist directly
+      void dub.patchClip(clipId, {
+        track: c.track, start_s: start, dur_s: dur, in_s: c.in_s, volume: c.volume,
+        x: c.x, y: c.y, w: c.w, opacity: c.opacity, text: c.text, text_style: c.text_style,
+      });
     },
     [dub],
   );
@@ -79,10 +86,10 @@ export function VideoStudio({ projectId, title: initialTitle }: Props) {
     if (projectName) setTitle(projectName);
   }, [projectName]);
 
-  // Seed the timeline visualisation from real project data whenever it changes.
-  const sig = clipSignature(dub.detail, dub.duration);
+  // The timeline is rebuilt from the project's dub_clips (the source of truth).
+  const sig = clipsSignature(dub.detail);
   useEffect(() => {
-    actions.replaceClips(buildClips(dub.detail, dub.duration));
+    actions.replaceClips(clipsToEditor(dub.detail));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig]);
 
@@ -157,6 +164,32 @@ export function VideoStudio({ projectId, title: initialTitle }: Props) {
     },
   };
 
+  // Add a media clip (video/audio/image) from a picked file, placed at the
+  // playhead on a fresh top layer.
+  // Delete routes by origin: user clip → remove; banner → remove overlay; dub
+  // video/tts/sub aren't deleted here (toggle via the eye / edit the dub data).
+  const onDeleteClip = useCallback(
+    (cid: string) => {
+      const c = dub.detail?.clips.find((x) => x.id === cid);
+      if (!c) return;
+      if (c.origin === "user") void dub.removeClip(cid);
+      else if (c.origin.startsWith("dub:banner:")) void dub.removeOverlay(c.origin.slice("dub:banner:".length));
+    },
+    [dub],
+  );
+
+  const addMedia = useCallback(async () => {
+    const file = await pickMediaFile();
+    if (!file) return;
+    const kind = file.type.startsWith("video") ? "video" : file.type.startsWith("audio") ? "audio" : "image";
+    const dur = await probeDuration(file, kind);
+    const track = Math.max(0, ...dub.clips.map((c) => c.track)) + 1;
+    await dub.addClip(
+      { kind, track, start_s: transport.time, dur_s: dur, x: 0, y: 0, w: kind === "image" ? 0.3 : 1, opacity: 1, volume: 1 },
+      file,
+    );
+  }, [dub, transport.time]);
+
   return (
     <div style={{ height: "100%", width: "100%", display: "flex", flexDirection: "column", background: C.appBg, color: "#fff", fontFamily: FONT, fontSize: 13, overflow: "hidden", userSelect: "none", WebkitFontSmoothing: "antialiased" }}>
       <TopBar title={title} onTitle={setTitle} onTitleCommit={(v) => void dub.rename(v)} snap={state.snap} onToggleSnap={actions.toggleSnap} dub={dub} history={history} historyOpen={historyOpen} onToggleHistory={() => setHistoryOpen((v) => !v)} />
@@ -166,7 +199,34 @@ export function VideoStudio({ projectId, title: initialTitle }: Props) {
         <Inspector state={state} actions={actions} dub={dub} transport={transport} trackCtl={trackCtl} />
         {historyOpen && <HistoryPanel history={history} onClose={() => setHistoryOpen(false)} />}
       </div>
-      <TimelineEditor state={state} actions={actions} transport={transport} trackCtl={trackCtl} onClipTrim={onTrimCommit} />
+      <TimelineEditor state={state} actions={actions} transport={transport} trackCtl={trackCtl} onClipTrim={onTrimCommit} onAddMedia={() => void addMedia()} onDeleteClip={onDeleteClip} />
     </div>
   );
+}
+
+/** Open a native file picker for a media file (video/audio/image). */
+function pickMediaFile(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "video/*,audio/*,image/*";
+    input.onchange = () => resolve(input.files?.[0] ?? null);
+    input.click();
+  });
+}
+
+/** Probe a media file's duration (seconds); images default to 5s. */
+function probeDuration(file: File, kind: string): Promise<number> {
+  if (kind === "image") return Promise.resolve(5);
+  return new Promise((resolve) => {
+    const el = document.createElement(kind === "video" ? "video" : "audio");
+    el.preload = "metadata";
+    el.onloadedmetadata = () => {
+      const d = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : 5;
+      URL.revokeObjectURL(el.src);
+      resolve(d);
+    };
+    el.onerror = () => resolve(5);
+    el.src = URL.createObjectURL(file);
+  });
 }

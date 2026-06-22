@@ -44,6 +44,10 @@ interface Props {
   trackCtl: TrackCtl;
   /** Persist a clip's new range after a drag/resize (parent re-seeds clips). */
   onClipTrim?: (clipId: string, start: number, dur: number) => void;
+  /** Pick + add a media clip (video/audio/image). */
+  onAddMedia?: () => void;
+  /** Delete a clip (parent decides what's deletable). */
+  onDeleteClip?: (clipId: string) => void;
 }
 
 // ── layout constants (gutter + editor rows must agree) ──
@@ -66,7 +70,7 @@ const EFFECTS: Record<string, TimelineEffect> = {
   sub: { id: "sub", name: "Subtitle" },
 };
 
-export function TimelineEditor({ state, actions, transport, trackCtl, onClipTrim }: Props) {
+export function TimelineEditor({ state, actions, transport, trackCtl, onClipTrim, onAddMedia, onDeleteClip }: Props) {
   const { clips, sel } = state;
   const ph = transport.time;
   const TT = Math.max(transport.duration || 0, totalDur(clips));
@@ -133,7 +137,7 @@ export function TimelineEditor({ state, actions, transport, trackCtl, onClipTrim
   };
 
   const splitOn = !!selClip;
-  const delOn = !!(selClip && selClip.id !== "vid");
+  const delOn = !!selClip;
 
   return (
     <div style={{ height: "33vh", flex: "none", background: C.panel, borderTop: `1px solid ${C.border}`, display: "flex", flexDirection: "column", minHeight: 0, userSelect: "none", WebkitUserSelect: "none" }}>
@@ -141,10 +145,13 @@ export function TimelineEditor({ state, actions, transport, trackCtl, onClipTrim
       <div style={{ flex: "none", height: 36, display: "flex", alignItems: "center", padding: "0 12px", gap: 10, borderBottom: `1px solid ${C.borderSoft}` }}>
         <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase", color: C.muted2 }}>Timeline</span>
         <div style={{ width: 1, height: 16, background: C.border }} />
+        <HoverBox as="button" onClick={() => onAddMedia?.()} style={{ ...toolBtn, color: C.purpleLt, cursor: "pointer" }} hoverStyle={{ background: "rgba(146,136,224,.16)", color: "#fff" }}>
+          <Icon name="plus" size={15} /> Thêm media
+        </HoverBox>
         <HoverBox as="button" onClick={() => splitOn && actions.splitSel()} style={{ ...toolBtn, color: splitOn ? C.steel : "#4a4e5e", cursor: splitOn ? "pointer" : "default" }} hoverStyle={splitOn ? { background: C.panel3, color: "#fff" } : undefined}>
           <Icon name="split" size={15} /> Cắt
         </HoverBox>
-        <HoverBox as="button" onClick={() => delOn && actions.delSel()} style={{ ...toolBtn, color: delOn ? C.steel : "#4a4e5e", cursor: delOn ? "pointer" : "default" }} hoverStyle={delOn ? { background: C.panel3, color: C.pink } : undefined}>
+        <HoverBox as="button" onClick={() => delOn && sel && onDeleteClip?.(sel)} style={{ ...toolBtn, color: delOn ? C.steel : "#4a4e5e", cursor: delOn ? "pointer" : "default" }} hoverStyle={delOn ? { background: C.panel3, color: C.pink } : undefined}>
           <Icon name="trash" size={15} /> Xoá
         </HoverBox>
         <div style={{ flex: 1 }} />
