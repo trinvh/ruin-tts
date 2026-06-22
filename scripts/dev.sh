@@ -15,7 +15,10 @@ cd "$(dirname "$0")/.."
 TTS_PORT=8080
 STUDIO_PORT=8090
 MEDIA_PORT=8099
-DEV_DIR=".dev"
+# Absolute so artifact paths (export.mp4, audio.wav…) the studio stores resolve
+# from any process — the Tauri shell that copies the exported file runs from a
+# different working directory than this script's studio.
+DEV_DIR="$(pwd)/.dev"
 mkdir -p "$DEV_DIR/studio-work"
 
 # cargo-watch is required; offer to install it once.
