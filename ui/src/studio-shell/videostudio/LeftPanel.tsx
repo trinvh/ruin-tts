@@ -186,18 +186,6 @@ interface StageCardProps {
   extra?: React.ReactNode;
 }
 
-/** Turn a raw backend/Gemini error into a short message + an optional hint, with
- *  the raw text kept for the collapsible "Chi tiết". */
-function prettyError(raw: string): { msg: string; hint?: string; raw?: string } {
-  const trimmed = raw.trim();
-  const m = trimmed.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-  const msg = m ? m[1].replace(/\\"/g, '"').replace(/\\n/g, " ").trim() : trimmed.split("\n")[0];
-  const hint = /UNAVAILABLE|overloaded|high demand|RESOURCE_EXHAUSTED|quota|rate.?limit|429|503/i.test(trimmed)
-    ? "Gemini đang quá tải hoặc hết hạn mức (key miễn phí). Đợi một lát rồi bấm Thử lại."
-    : undefined;
-  return { msg: msg || trimmed, hint, raw: msg !== trimmed ? trimmed : undefined };
-}
-
 function StageCard({ num, title, sub, done, running, locked, working, failed, error, runLabel, onRun, previewLines, voice, voiceOpts, onVoice, extra }: StageCardProps) {
   const cardBorder = failed ? "rgba(255,124,163,.45)" : done ? "rgba(80,209,170,.35)" : running ? "rgba(255,181,114,.4)" : C.borderSoft;
   const cardBg = failed ? "rgba(255,124,163,.06)" : running ? "rgba(255,181,114,.06)" : C.panel2;
@@ -218,21 +206,11 @@ function StageCard({ num, title, sub, done, running, locked, working, failed, er
         {locked && <Icon name="lock" size={14} stroke={1.8} color={C.muted5} />}
       </div>
 
-      {failed && error && (() => {
-        const e = prettyError(error);
-        return (
-          <div style={{ marginTop: 10, border: "1px solid rgba(255,124,163,.3)", background: "rgba(255,124,163,.1)", color: C.pink, borderRadius: 7, padding: "8px 10px", fontSize: 11.5, lineHeight: 1.45 }}>
-            <div style={{ fontWeight: 600 }}>{e.msg}</div>
-            {e.hint && <div style={{ marginTop: 5, color: C.orange, fontSize: 11 }}>{e.hint}</div>}
-            {e.raw && (
-              <details style={{ marginTop: 6 }}>
-                <summary style={{ cursor: "pointer", fontSize: 10.5, opacity: 0.7 }}>Chi tiết kỹ thuật</summary>
-                <div style={{ marginTop: 5, maxHeight: 90, overflow: "auto", whiteSpace: "pre-wrap", fontSize: 10, opacity: 0.85, fontFamily: MONO }}>{e.raw}</div>
-              </details>
-            )}
-          </div>
-        );
-      })()}
+      {failed && error && (
+        <div style={{ marginTop: 10, border: "1px solid rgba(255,124,163,.3)", background: "rgba(255,124,163,.1)", color: C.pink, borderRadius: 7, padding: "7px 9px", fontSize: 11, lineHeight: 1.45, maxHeight: 140, overflow: "auto", whiteSpace: "pre-wrap", fontFamily: MONO }}>
+          {error}
+        </div>
+      )}
 
       {voice !== undefined && (
         <div style={{ position: "relative", marginTop: 11 }}>
