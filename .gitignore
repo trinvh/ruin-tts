@@ -36,3 +36,6 @@ __pycache__
 
 # Dev hot-reload state (make dev)
 .dev/
+
+# git worktrees (isolated workspaces)
+.worktrees/
