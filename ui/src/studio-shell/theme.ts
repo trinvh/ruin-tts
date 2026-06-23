@@ -98,6 +98,7 @@ export function injectStudioStyles(): void {
 .bss input.num{-moz-appearance:textfield;}
 .bss input::placeholder{color:#5a5e70;}
 @keyframes bss-spin{to{transform:rotate(360deg);}}
+@keyframes bss-indet{0%{left:-40%;}100%{left:100%;}}
 `;
   document.head.appendChild(style);
 }

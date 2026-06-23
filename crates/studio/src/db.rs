@@ -593,11 +593,28 @@ impl Db {
     }
 
     pub async fn set_dub_status(&self, id: &str, status: &str, error: Option<&str>) -> Result<()> {
+        // Clear any prior progress: a new step starts fresh, and a finished step
+        // shows no bar.
         sqlx::query(
-            "UPDATE dub_projects SET status = ?, error = ?, updated_at = datetime('now') WHERE id = ?",
+            "UPDATE dub_projects SET status = ?, error = ?, progress = NULL, progress_label = NULL, updated_at = datetime('now') WHERE id = ?",
         )
         .bind(status)
         .bind(error)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Persist the in-flight step's progress: `frac` is 0..1 (or `None` for an
+    /// indeterminate step) and `label` says what it's doing. Read by the polling
+    /// UI to draw a real progress bar.
+    pub async fn set_dub_progress(&self, id: &str, frac: Option<f64>, label: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE dub_projects SET progress = ?, progress_label = ?, updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(frac.map(|f| f.clamp(0.0, 1.0)))
+        .bind(label)
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -1248,6 +1265,8 @@ fn dub_project_from_row(r: sqlx::sqlite::SqliteRow) -> crate::dub::DubProject {
         video_offset_s: r.get("video_offset_s"),
         vn_track_path: r.get("vn_track_path"),
         export_path: r.get("export_path"),
+        progress: r.get("progress"),
+        progress_label: r.get("progress_label"),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     }

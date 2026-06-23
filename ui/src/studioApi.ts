@@ -41,6 +41,8 @@ export type DubProject = {
   sub_size: number; sub_color: string; sub_bilingual: boolean; sub_bg: boolean; video_enabled: boolean;
   video_offset_s: number;
   vn_track_path: string | null; export_path: string | null;
+  /** In-flight step progress: 0..1, or null when idle/indeterminate. */
+  progress: number | null; progress_label: string | null;
   created_at: string; updated_at: string;
 };
 export type DubSettings = {

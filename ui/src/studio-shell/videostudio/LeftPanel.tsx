@@ -144,6 +144,8 @@ function DubTab({ dub }: { dub: DubProjectHook }) {
               locked={locked}
               working={working}
               failed={failed}
+              progress={running ? p.progress : undefined}
+              progressLabel={running ? p.progress_label : undefined}
               error={failed ? projErr : undefined}
               runLabel={failed ? "Thử lại" : done ? "Chạy lại" : meta.runLabel}
               onRun={() => dub.run(meta.step)}
@@ -176,6 +178,9 @@ interface StageCardProps {
   locked: boolean;
   working: boolean;
   failed?: boolean;
+  /** 0..1 progress of the running step; null/undefined = indeterminate. */
+  progress?: number | null;
+  progressLabel?: string | null;
   error?: string | null;
   runLabel: string;
   onRun: () => void;
@@ -186,7 +191,7 @@ interface StageCardProps {
   extra?: React.ReactNode;
 }
 
-function StageCard({ num, title, sub, done, running, locked, working, failed, error, runLabel, onRun, previewLines, voice, voiceOpts, onVoice, extra }: StageCardProps) {
+function StageCard({ num, title, sub, done, running, locked, working, failed, progress, progressLabel, error, runLabel, onRun, previewLines, voice, voiceOpts, onVoice, extra }: StageCardProps) {
   const cardBorder = failed ? "rgba(255,124,163,.45)" : done ? "rgba(80,209,170,.35)" : running ? "rgba(255,181,114,.4)" : C.borderSoft;
   const cardBg = failed ? "rgba(255,124,163,.06)" : running ? "rgba(255,181,114,.06)" : C.panel2;
   const iconBg = failed ? "rgba(255,124,163,.2)" : done ? "rgba(80,209,170,.2)" : running ? "rgba(255,181,114,.2)" : C.panel3;
@@ -239,6 +244,27 @@ function StageCard({ num, title, sub, done, running, locked, working, failed, er
       )}
 
       {extra}
+
+      {running && (
+        <div style={{ marginTop: 11 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 5, gap: 8 }}>
+            <span style={{ fontSize: 11, color: C.orange, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {progressLabel || "Đang xử lý…"}
+            </span>
+            {progress != null && (
+              <span style={{ fontSize: 11, fontWeight: 700, color: C.orange, fontFamily: MONO, flex: "none" }}>{Math.round(progress * 100)}%</span>
+            )}
+          </div>
+          <div style={{ position: "relative", height: 6, borderRadius: 999, background: "rgba(255,181,114,.15)", overflow: "hidden" }}>
+            {progress != null ? (
+              <div style={{ position: "absolute", inset: 0, width: `${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%`, background: C.orange, borderRadius: 999, transition: "width .3s ease" }} />
+            ) : (
+              // Indeterminate: a stripe sliding across the track.
+              <div style={{ position: "absolute", top: 0, bottom: 0, width: "40%", background: C.orange, borderRadius: 999, animation: "bss-indet 1.1s ease-in-out infinite" }} />
+            )}
+          </div>
+        </div>
+      )}
 
       {!locked && (
         <div style={{ marginTop: 11 }}>

@@ -62,6 +62,11 @@ pub struct DubProject {
     pub video_offset_s: f64,
     pub vn_track_path: Option<String>,
     pub export_path: Option<String>,
+    /// Fraction (0..1) of the in-flight step that's done; `None` while idle or
+    /// for a step with no countable units (indeterminate). Reset on status change.
+    pub progress: Option<f64>,
+    /// Human label for what the step is currently doing (e.g. "Đọc câu 12/47").
+    pub progress_label: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

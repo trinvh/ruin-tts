@@ -30,10 +30,27 @@ const TRANSLATE_CONTEXT: usize = 10;
 /// then eating a 30s 429 backoff. A pro key never trips this (no pacing).
 const TRANSLATE_PACE_SECS: u64 = 5;
 
+/// Persist + log one progress beat for a running step. `frac` is 0..1 (or `None`
+/// for an indeterminate step); `label` is the Vietnamese description shown in the
+/// UI. Also prints to the server console so a stuck run is visible in logs. DB
+/// write failures are non-fatal — progress is best-effort telemetry.
+async fn report(services: &Services, project_id: &str, frac: Option<f64>, label: &str) {
+    match frac {
+        Some(f) => tracing::info!("dub[{project_id}] {:>3.0}% — {label}", f * 100.0),
+        None => tracing::info!("dub[{project_id}]  ··· — {label}"),
+    }
+    if let Err(e) = services.db.set_dub_progress(project_id, frac, label).await {
+        tracing::warn!("dub[{project_id}] không ghi được progress: {e}");
+    }
+}
+
 /// Translate every line in safe-sized chunks, carrying a short rolling context
 /// across boundaries (so xưng hô stays consistent over a long script), and
-/// self-healing any ids the model drops. Returns id → Vietnamese.
+/// self-healing any ids the model drops. Reports per-chunk progress. Returns
+/// id → Vietnamese.
 async fn translate_all(
+    services: &Services,
+    project_id: &str,
     client: &GeminiClient,
     lang: &str,
     lines: &[TranslateLine],
@@ -41,7 +58,15 @@ async fn translate_all(
     let mut out: HashMap<i64, String> = HashMap::new();
     // Rolling tail of (source, vi) pairs from the most recent chunk.
     let mut context: Vec<(String, String)> = Vec::new();
+    let total = lines.len().div_ceil(TRANSLATE_CHUNK).max(1);
     for (i, chunk) in lines.chunks(TRANSLATE_CHUNK).enumerate() {
+        report(
+            services,
+            project_id,
+            Some(i as f64 / total as f64),
+            &format!("Dịch lô {}/{} ({} câu)", i + 1, total, chunk.len()),
+        )
+        .await;
         // Pace only after a 429 has been seen (free-tier key); a pro key stays
         // un-paced and runs at full speed.
         if i > 0 && client.is_throttled() {
@@ -129,6 +154,7 @@ pub async fn extract_audio(services: &Services, project_id: &str) -> Result<()> 
         .ok_or_else(|| anyhow!("không tìm thấy dự án"))?;
     let dir = project_dir(services, project_id);
     ensure_dir(&dir).await?;
+    report(services, project_id, None, "Tách âm thanh từ video…").await;
     let audio = dir.join("audio.wav");
     media::run_ffmpeg(&media::extract_audio_args(
         Path::new(&project.video_path),
@@ -170,6 +196,13 @@ pub async fn analyze(services: &Services, project_id: &str) -> Result<()> {
         )
     };
     let client = MediaAiClient::new(base);
+    report(
+        services,
+        project_id,
+        None,
+        "Nhận dạng lời thoại + tách người nói (có thể mất vài phút)…",
+    )
+    .await;
     let res = client.analyze(&audio, None, None).await?;
 
     // Replace garbled overlap segments with the per-speaker transcripts recovered
@@ -275,7 +308,7 @@ pub async fn translate(services: &Services, project_id: &str) -> Result<()> {
         .collect();
 
     let client = GeminiClient::new(key, model);
-    let by_idx = translate_all(&client, &lang, &lines).await?;
+    let by_idx = translate_all(services, project_id, &client, &lang, &lines).await?;
     for s in &segs {
         if let Some(vi) = by_idx.get(&s.idx) {
             services.db.set_dub_segment_text(&s.id, vi).await?;
@@ -304,6 +337,16 @@ pub async fn synthesize(services: &Services, project_id: &str) -> Result<()> {
 
     let tts = services.tts().await;
     let ref_cache = std::sync::Mutex::new(HashMap::new());
+    // Per-segment progress: count only the lines we'll actually synthesize.
+    let total = segs.iter().filter(|s| !s.text_vi.trim().is_empty()).count();
+    report(
+        services,
+        project_id,
+        Some(0.0),
+        &format!("Chuẩn bị đọc {total} câu…"),
+    )
+    .await;
+    let mut done = 0usize;
     for seg in &segs {
         if seg.text_vi.trim().is_empty() {
             continue;
@@ -320,6 +363,14 @@ pub async fn synthesize(services: &Services, project_id: &str) -> Result<()> {
             &ref_cache,
         )
         .await?;
+        done += 1;
+        report(
+            services,
+            project_id,
+            Some(done as f64 / total.max(1) as f64),
+            &format!("Đọc câu {done}/{total}"),
+        )
+        .await;
     }
     // If the Vietnamese track was already built, rebuild it now so a voice/text
     // change followed by re-synth takes effect in the preview without a manual
@@ -468,7 +519,7 @@ pub async fn reshorten_long(services: &Services, project_id: &str) -> Result<usi
         })
         .collect();
     let client = GeminiClient::new(key, model);
-    let by_idx = translate_all(&client, &lang, &lines).await?;
+    let by_idx = translate_all(services, project_id, &client, &lang, &lines).await?;
 
     let speakers = services.db.get_dub_speakers(project_id).await?;
     let voice_by_speaker: HashMap<String, Option<String>> =
@@ -512,6 +563,7 @@ pub async fn build_track(services: &Services, project_id: &str) -> Result<()> {
     let segs = services.db.get_dub_segments(project_id).await?;
     let dir = project_dir(services, project_id);
     ensure_dir(&dir).await?;
+    report(services, project_id, None, "Ghép track tiếng Việt…").await;
 
     // Place each fitted clip at its *absolute* start time and mix (not serial
     // concat), so the dub tracks the original timeline exactly — overlapping
@@ -556,6 +608,13 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
         .db
         .clear_dub_field(project_id, "export_path")
         .await?;
+    report(
+        services,
+        project_id,
+        None,
+        "Dựng & xuất video (encode — có thể mất vài phút)…",
+    )
+    .await;
 
     // Clip-driven timeline: refresh the `dub:*` clips, then if any clip exists,
     // render the whole timeline with the generalized compositor and return —

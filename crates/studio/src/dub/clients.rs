@@ -258,6 +258,9 @@ impl GeminiClient {
                     let wait = retry_delay_secs(&text)
                         .unwrap_or(30 * attempt as u64)
                         .clamp(1, 90);
+                    tracing::warn!(
+                        "Gemini {code} (lần {attempt}/{GEMINI_MAX_RETRIES}) — chờ {wait}s rồi thử lại"
+                    );
                     tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
                     continue;
                 }

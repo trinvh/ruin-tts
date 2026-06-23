@@ -36,7 +36,13 @@ export function TopBar({ title, onTitle, onTitleCommit, snap, onToggleSnap, dub,
   const status = dub.detail?.project.status ?? "";
   const working = dub.busy || dub.autoRun;
   const st = dubStatus(status || "created");
-  const statusText = dub.autoRun ? "Đang chạy…" : st.label;
+  const prog = dub.detail?.project.progress ?? null;
+  const progLabel = dub.detail?.project.progress_label ?? null;
+  const pct = prog != null ? ` ${Math.round(prog * 100)}%` : "";
+  // While a step runs, show what it's doing (+ %); otherwise the static label.
+  const statusText = working
+    ? `${progLabel || (dub.autoRun ? "Đang chạy…" : st.label)}${pct}`
+    : st.label;
   const statusColor = working ? C.orange : status === "failed" ? C.pink : status === "done" ? C.teal : C.muted;
 
   const h = dub.info?.video?.height ?? null;

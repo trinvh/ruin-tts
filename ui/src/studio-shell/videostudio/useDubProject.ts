@@ -135,6 +135,21 @@ export function useDubProject(id: string): DubProjectHook {
     return () => clearInterval(h);
   }, [busy, refresh]);
 
+  // Console trace of the pipeline: log every status change and every progress
+  // beat (label / %), so a stuck or slow run is visible in the devtools console.
+  const prevTrace = useRef("");
+  useEffect(() => {
+    const p = detail?.project;
+    if (!p) return;
+    const pct = p.progress == null ? "" : ` ${Math.round(p.progress * 100)}%`;
+    const line = `[dub] ${p.status}${pct}${p.progress_label ? " — " + p.progress_label : ""}`;
+    if (line !== prevTrace.current) {
+      prevTrace.current = line;
+      // eslint-disable-next-line no-console
+      console.log(line);
+    }
+  }, [detail?.project.status, detail?.project.progress, detail?.project.progress_label]);
+
   // bump media version only when the VN track was (re)built, so settings edits
   // don't reload the player to a black frame.
   useEffect(() => {
