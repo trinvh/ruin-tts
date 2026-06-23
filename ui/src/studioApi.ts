@@ -28,6 +28,8 @@ export type AppConfig = {
   yt_client_id: string; yt_client_secret: string; yt_refresh_token: string; yt_privacy: string;
   media_ai_base: string; gemini_api_key: string; gemini_model: string;
   dub_voice_male: string; dub_voice_female: string;
+  /** Default cap on diarization speakers (a project may override). */
+  dub_max_speakers: number;
   profile: Profile;
 };
 
@@ -41,6 +43,8 @@ export type DubProject = {
   sub_size: number; sub_color: string; sub_bilingual: boolean; sub_bg: boolean; video_enabled: boolean;
   video_offset_s: number;
   vn_track_path: string | null; export_path: string | null;
+  /** Per-project diarization speaker cap; null = inherit the global default. */
+  max_speakers: number | null;
   /** In-flight step progress: 0..1, or null when idle/indeterminate. */
   progress: number | null; progress_label: string | null;
   created_at: string; updated_at: string;
@@ -50,6 +54,8 @@ export type DubSettings = {
   burn_subtitles: boolean; blur_subtitle: boolean;
   blur_x: number; blur_y: number; blur_w: number; blur_h: number; sub_y: number;
   sub_size: number; sub_color: string; sub_bilingual: boolean; sub_bg: boolean; video_enabled: boolean;
+  /** Per-project diarization speaker cap; null inherits the global default. */
+  max_speakers: number | null;
 };
 export type DubSegment = {
   id: string; project_id: string; idx: number; start_s: number; end_s: number;
@@ -156,8 +162,10 @@ export async function updateDubSettings(id: string, s: DubSettings): Promise<voi
   if (!r.ok) throw new Error(`${r.status}: ${await r.text().catch(() => "")}`);
 }
 export type DubStep = "extract" | "analyze" | "translate" | "synthesize" | "reshorten" | "build" | "export";
-export async function runDubStep(id: string, step: DubStep): Promise<void> {
-  const r = await fetch(`${await base()}/api/dub/projects/${id}/${step}`, { method: "POST" });
+export async function runDubStep(id: string, step: DubStep, force?: boolean): Promise<void> {
+  // `force` (synthesize only) regenerates from scratch, bypassing the TTS cache.
+  const q = force ? "?force=true" : "";
+  const r = await fetch(`${await base()}/api/dub/projects/${id}/${step}${q}`, { method: "POST" });
   if (!r.ok) throw new Error(`${r.status}: ${await r.text().catch(() => "")}`);
 }
 export async function cancelDub(id: string): Promise<void> {

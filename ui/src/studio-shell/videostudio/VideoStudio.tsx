@@ -14,6 +14,7 @@ import "@xzdarcy/react-timeline-editor/dist/react-timeline-editor.css";
 import "./timelineEditor.css";
 import { TimelineEditor } from "./TimelineEditor";
 import { HistoryPanel } from "./HistoryPanel";
+import { ProjectSettings } from "./ProjectSettings";
 
 interface Props {
   /** Real dub project id — the editor loads + drives this project. */
@@ -66,6 +67,7 @@ export function VideoStudio({ projectId, title: initialTitle }: Props) {
   const history = useEditorHistory(dub);
   const [title, setTitle] = useState(initialTitle ?? "Dự án lồng tiếng");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Undo/redo keyboard shortcuts (preview-effective; persisted so export matches).
   useEffect(() => {
@@ -193,12 +195,13 @@ export function VideoStudio({ projectId, title: initialTitle }: Props) {
 
   return (
     <div style={{ height: "100%", width: "100%", display: "flex", flexDirection: "column", background: C.appBg, color: "#fff", fontFamily: FONT, fontSize: 13, overflow: "hidden", userSelect: "none", WebkitFontSmoothing: "antialiased" }}>
-      <TopBar title={title} onTitle={setTitle} onTitleCommit={(v) => void dub.rename(v)} snap={state.snap} onToggleSnap={actions.toggleSnap} dub={dub} history={history} historyOpen={historyOpen} onToggleHistory={() => setHistoryOpen((v) => !v)} />
+      <TopBar title={title} onTitle={setTitle} onTitleCommit={(v) => void dub.rename(v)} snap={state.snap} onToggleSnap={actions.toggleSnap} dub={dub} history={history} historyOpen={historyOpen} onToggleHistory={() => setHistoryOpen((v) => !v)} onOpenSettings={() => setSettingsOpen(true)} />
       <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
         <LeftPanel state={state} actions={actions} dub={dub} />
         <PreviewStage state={state} actions={actions} dub={dub} transport={transport} />
         <Inspector state={state} actions={actions} dub={dub} transport={transport} trackCtl={trackCtl} />
         {historyOpen && <HistoryPanel history={history} onClose={() => setHistoryOpen(false)} />}
+        {settingsOpen && <ProjectSettings dub={dub} onClose={() => setSettingsOpen(false)} />}
       </div>
       <TimelineEditor state={state} actions={actions} transport={transport} trackCtl={trackCtl} onClipTrim={onTrimCommit} onAddMedia={() => void addMedia()} onDeleteClip={onDeleteClip} />
     </div>

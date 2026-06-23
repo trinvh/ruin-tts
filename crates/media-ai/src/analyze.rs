@@ -80,6 +80,7 @@ impl Analyzer {
         audio_path: &str,
         hint_lang: Option<&str>,
         num_speakers: Option<u32>,
+        max_speakers: Option<u32>,
     ) -> Result<AnalyzeResponse> {
         let samples = audio::load_wav_16k_mono(audio_path)?;
         let asr = self.asr.transcribe(&samples, hint_lang)?;
@@ -107,7 +108,12 @@ impl Analyzer {
         let mut speaker_of = vec!["SPEAKER_00".to_string(); asr.segments.len()];
         if !with_emb.is_empty() {
             let vecs: Vec<Vec<f32>> = with_emb.iter().map(|&i| embs[i].clone().unwrap()).collect();
-            let labels = assign_speakers(&vecs, self.threshold, num_speakers.map(|n| n as usize));
+            let labels = assign_speakers(
+                &vecs,
+                self.threshold,
+                num_speakers.map(|n| n as usize),
+                max_speakers.map(|n| n as usize),
+            );
             for (k, &i) in with_emb.iter().enumerate() {
                 speaker_of[i] = labels[k].clone();
             }

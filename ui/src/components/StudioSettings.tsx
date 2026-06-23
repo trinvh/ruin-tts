@@ -72,8 +72,8 @@ export function StudioSettings() {
 
       <h4>Lồng tiếng video (dịch)</h4>
       <p className="muted small">
-        Gemini dịch thoại sang tiếng Việt; media-ai (sidecar Python) tách giọng + nhận diện người
-        nói. Chạy sidecar bằng <code>uvicorn app:app --port 8099</code> trong <code>services/media-ai</code>.
+        Gemini dịch thoại sang tiếng Việt; media-ai (sidecar do app tự chạy) tách giọng + nhận diện
+        người nói.
       </p>
       <div className="cfg-grid">
         <label>Gemini API key {T(cfg.gemini_api_key, (v) => set({ gemini_api_key: v }), "AIza…")}</label>
@@ -81,7 +81,12 @@ export function StudioSettings() {
         <label>media-ai base {T(cfg.media_ai_base, (v) => set({ media_ai_base: v }), "http://127.0.0.1:8099")}</label>
         <label>Giọng nam ưu tiên (tuỳ chọn) {T(cfg.dub_voice_male, (v) => set({ dub_voice_male: v }), "để trống = tự chọn")}</label>
         <label>Giọng nữ ưu tiên (tuỳ chọn) {T(cfg.dub_voice_female, (v) => set({ dub_voice_female: v }), "để trống = tự chọn")}</label>
+        <label>Số người nói tối đa {N(cfg.dub_max_speakers, (v) => set({ dub_max_speakers: Math.max(0, Math.round(v || 0)) }))}</label>
       </div>
+      <p className="muted small">
+        “Số người nói tối đa” giới hạn việc tách người nói (tránh video dài/nhiều nhạc bị tách thành
+        hàng trăm người ảo). Mặc định 4; đặt 0 = không giới hạn. Từng dự án có thể ghi đè trong Cài đặt dự án.
+      </p>
       <p className="muted small">
         Khi phân tích, mỗi người nói tự được gán giọng theo giới tính — phân loại từ tên giọng Beesoft
         (chứa “nam”/“nữ”), nhiều người cùng giới nhận giọng khác nhau. 2 ô trên chỉ để ưu tiên một giọng

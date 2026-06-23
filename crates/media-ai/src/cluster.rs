@@ -16,9 +16,16 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 
 /// Cluster `embeddings` into speaker ids (0-based, contiguous). Merge the two
 /// most-similar clusters (average linkage) while the best similarity ≥
-/// `threshold`; if `num_speakers` is given, merge until exactly that many
-/// remain (ignoring the threshold).
-pub fn cluster(embeddings: &[Vec<f32>], threshold: f32, num_speakers: Option<usize>) -> Vec<usize> {
+/// `threshold`. `num_speakers` forces exactly that many (ignoring the
+/// threshold). `max_speakers` is an upper bound: once the threshold rule would
+/// stop, keep merging the closest pairs until at most that many remain — this
+/// stops a long/noisy video from fragmenting into hundreds of phantom speakers.
+pub fn cluster(
+    embeddings: &[Vec<f32>],
+    threshold: f32,
+    num_speakers: Option<usize>,
+    max_speakers: Option<usize>,
+) -> Vec<usize> {
     let n = embeddings.len();
     if n == 0 {
         return Vec::new();
@@ -60,7 +67,13 @@ pub fn cluster(embeddings: &[Vec<f32>], threshold: f32, num_speakers: Option<usi
             }
         }
         if num_speakers.is_none() && best_sim < threshold {
-            break;
+            // Below the merge threshold — normally stop. But if a speaker cap is
+            // set and we still exceed it, keep merging the closest pairs so the
+            // result honours the cap instead of fragmenting.
+            let over_cap = max_speakers.is_some_and(|m| clusters.len() > m.max(1));
+            if !over_cap {
+                break;
+            }
         }
         let (a, b) = best;
         let mut moved = std::mem::take(&mut clusters[b]);
@@ -102,7 +115,7 @@ mod tests {
             vec![0.0, 1.0],
             vec![0.05, 0.95],
         ];
-        let labels = cluster(&e, 0.5, None);
+        let labels = cluster(&e, 0.5, None, None);
         assert_eq!(labels[0], labels[1]);
         assert_eq!(labels[2], labels[3]);
         assert_ne!(labels[0], labels[2]);
@@ -112,20 +125,29 @@ mod tests {
     #[test]
     fn all_similar_one_cluster() {
         let e = vec![vec![1.0, 0.0], vec![0.99, 0.01], vec![0.98, 0.0]];
-        assert_eq!(distinct(&cluster(&e, 0.5, None)), 1);
+        assert_eq!(distinct(&cluster(&e, 0.5, None, None)), 1);
     }
 
     #[test]
     fn num_speakers_forces_k() {
         // pairwise sims all < 0.95 → threshold alone gives 3 clusters; Some(2) forces 2.
         let e = vec![vec![1.0, 0.0], vec![0.7, 0.7], vec![0.0, 1.0]];
-        assert_eq!(distinct(&cluster(&e, 0.95, None)), 3);
-        assert_eq!(distinct(&cluster(&e, 0.95, Some(2))), 2);
+        assert_eq!(distinct(&cluster(&e, 0.95, None, None)), 3);
+        assert_eq!(distinct(&cluster(&e, 0.95, Some(2), None)), 2);
+    }
+
+    #[test]
+    fn max_speakers_caps_count_below_threshold() {
+        // Threshold alone would leave 3 clusters; a cap of 2 forces one more merge.
+        let e = vec![vec![1.0, 0.0], vec![0.7, 0.7], vec![0.0, 1.0]];
+        assert_eq!(distinct(&cluster(&e, 0.95, None, Some(2))), 2);
+        // A cap at/above the natural count changes nothing.
+        assert_eq!(distinct(&cluster(&e, 0.95, None, Some(5))), 3);
     }
 
     #[test]
     fn empty_and_single() {
-        assert!(cluster(&[], 0.5, None).is_empty());
-        assert_eq!(cluster(&[vec![1.0, 0.0]], 0.5, None), vec![0]);
+        assert!(cluster(&[], 0.5, None, None).is_empty());
+        assert_eq!(cluster(&[vec![1.0, 0.0]], 0.5, None, None), vec![0]);
     }
 }

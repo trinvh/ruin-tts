@@ -694,12 +694,14 @@ impl Db {
         sub_bilingual: bool,
         sub_bg: bool,
         video_enabled: bool,
+        max_speakers: Option<i64>,
     ) -> Result<()> {
         let (blur_x, blur_y, blur_w, blur_h) = blur_rect;
         sqlx::query(
             "UPDATE dub_projects SET name = ?, gemini_model = ?, original_volume = ?, vn_volume = ?, speed_cap = ?,
                burn_subtitles = ?, blur_subtitle = ?, blur_x = ?, blur_y = ?, blur_w = ?, blur_h = ?,
-               sub_y = ?, sub_size = ?, sub_color = ?, sub_bilingual = ?, sub_bg = ?, video_enabled = ?, updated_at = datetime('now')
+               sub_y = ?, sub_size = ?, sub_color = ?, sub_bilingual = ?, sub_bg = ?, video_enabled = ?,
+               max_speakers = ?, updated_at = datetime('now')
              WHERE id = ?",
         )
         .bind(name)
@@ -719,6 +721,7 @@ impl Db {
         .bind(sub_bilingual as i64)
         .bind(sub_bg as i64)
         .bind(video_enabled as i64)
+        .bind(max_speakers)
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -1265,6 +1268,7 @@ fn dub_project_from_row(r: sqlx::sqlite::SqliteRow) -> crate::dub::DubProject {
         video_offset_s: r.get("video_offset_s"),
         vn_track_path: r.get("vn_track_path"),
         export_path: r.get("export_path"),
+        max_speakers: r.get("max_speakers"),
         progress: r.get("progress"),
         progress_label: r.get("progress_label"),
         created_at: r.get("created_at"),

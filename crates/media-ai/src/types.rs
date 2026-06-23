@@ -9,6 +9,10 @@ pub struct AnalyzeRequest {
     pub hint_lang: Option<String>,
     #[serde(default)]
     pub num_speakers: Option<u32>,
+    /// Upper bound on diarization speakers (≠ exact `num_speakers`); caps the
+    /// clustering so a long/noisy video can't fragment into phantom speakers.
+    #[serde(default)]
+    pub max_speakers: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]

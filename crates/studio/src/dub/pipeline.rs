@@ -222,13 +222,22 @@ pub async fn analyze(services: &Services, project_id: &str) -> Result<()> {
     let audio = std::fs::canonicalize(&audio)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or(audio);
-    let (base, voice_male, voice_female) = {
+    let (base, voice_male, voice_female, global_max_speakers) = {
         let c = services.config.read().await;
         (
             c.media_ai_base.clone(),
             c.dub_voice_male.clone(),
             c.dub_voice_female.clone(),
+            c.dub_max_speakers,
         )
+    };
+    // Cap diarization: project override wins over the global default; a non-
+    // positive value means "no cap" (pass None to pyannote).
+    let max_speakers = match project.max_speakers {
+        Some(n) if n > 0 => Some(n as u32),
+        Some(_) => None,
+        None if global_max_speakers > 0 => Some(global_max_speakers),
+        None => None,
     };
     let client = MediaAiClient::new(base);
     report(
@@ -242,7 +251,7 @@ pub async fn analyze(services: &Services, project_id: &str) -> Result<()> {
         services,
         project_id,
         "Nhận dạng lời thoại + tách người nói",
-        client.analyze(&audio, None, None),
+        client.analyze(&audio, None, None, max_speakers),
     )
     .await?;
 

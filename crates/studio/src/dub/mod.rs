@@ -62,6 +62,9 @@ pub struct DubProject {
     pub video_offset_s: f64,
     pub vn_track_path: Option<String>,
     pub export_path: Option<String>,
+    /// Per-project diarization speaker cap; `None` inherits the global default
+    /// (`AppConfig::dub_max_speakers`). Prevents pyannote over-clustering.
+    pub max_speakers: Option<i64>,
     /// Fraction (0..1) of the in-flight step that's done; `None` while idle or
     /// for a step with no countable units (indeterminate). Reset on status change.
     pub progress: Option<f64>,

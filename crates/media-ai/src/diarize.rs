@@ -22,8 +22,9 @@ pub fn assign_speakers(
     embeddings: &[Vec<f32>],
     threshold: f32,
     num_speakers: Option<usize>,
+    max_speakers: Option<usize>,
 ) -> Vec<String> {
-    cluster(embeddings, threshold, num_speakers)
+    cluster(embeddings, threshold, num_speakers, max_speakers)
         .into_iter()
         .map(speaker_label)
         .collect()
@@ -41,7 +42,7 @@ mod tests {
             vec![0.0, 1.0],
             vec![0.03, 0.97],
         ];
-        let s = assign_speakers(&e, 0.5, None);
+        let s = assign_speakers(&e, 0.5, None, None);
         assert_eq!(s[0], "SPEAKER_00");
         assert_eq!(s[0], s[1]);
         assert_eq!(s[2], s[3]);
@@ -50,6 +51,6 @@ mod tests {
 
     #[test]
     fn empty_input() {
-        assert!(assign_speakers(&[], 0.5, None).is_empty());
+        assert!(assign_speakers(&[], 0.5, None, None).is_empty());
     }
 }

@@ -303,7 +303,12 @@ async fn analyze_handler(
     }
     // ASR is CPU-heavy → run off the async runtime.
     let res = tokio::task::spawn_blocking(move || {
-        analyzer.analyze(&req.audio_path, req.hint_lang.as_deref(), req.num_speakers)
+        analyzer.analyze(
+            &req.audio_path,
+            req.hint_lang.as_deref(),
+            req.num_speakers,
+            req.max_speakers,
+        )
     })
     .await;
     match res {

@@ -24,6 +24,7 @@ export function settingsOf(p: DubProject, over?: Partial<DubSettings>): DubSetti
     sub_bilingual: p.sub_bilingual,
     sub_bg: p.sub_bg,
     video_enabled: p.video_enabled,
+    max_speakers: p.max_speakers,
     ...over,
   };
 }

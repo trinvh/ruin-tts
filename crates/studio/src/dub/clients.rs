@@ -14,6 +14,10 @@ struct AnalyzeRequest<'a> {
     hint_lang: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     num_speakers: Option<u32>,
+    /// Upper bound on diarization speakers (≠ exact `num_speakers`); caps
+    /// pyannote so a long/noisy video can't explode into phantom speakers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_speakers: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +77,7 @@ impl MediaAiClient {
         audio_path: &str,
         hint_lang: Option<&str>,
         num_speakers: Option<u32>,
+        max_speakers: Option<u32>,
     ) -> Result<AnalyzeResponse> {
         let url = format!("{}/analyze", self.base_url);
         let resp = self
@@ -82,6 +87,7 @@ impl MediaAiClient {
                 audio_path,
                 hint_lang,
                 num_speakers,
+                max_speakers,
             })
             .send()
             .await

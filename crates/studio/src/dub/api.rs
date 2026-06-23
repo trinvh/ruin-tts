@@ -181,6 +181,9 @@ struct UpdateSettings {
     sub_bg: bool,
     #[serde(default = "default_true")]
     video_enabled: bool,
+    /// Per-project diarization speaker cap; null inherits the global default.
+    #[serde(default)]
+    max_speakers: Option<i64>,
 }
 
 fn default_true() -> bool {
@@ -253,6 +256,7 @@ async fn update_settings(
             b.sub_bilingual,
             b.sub_bg,
             b.video_enabled,
+            b.max_speakers.filter(|n| *n > 0),
         )
         .await?;
     let project = st.services.db.get_dub_project(&id).await?;
