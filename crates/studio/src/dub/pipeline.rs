@@ -3,7 +3,7 @@
 //! progress so the UI (which polls the project) stays live. Steps are separate
 //! so the operator can edit translations / voice mapping in between.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
@@ -16,6 +16,98 @@ use crate::tts::{SynthRequest, VoiceInfo};
 
 /// Vietnamese speaking pace (words/sec) used to budget "translate shorter".
 const VI_WORDS_PER_SEC: f64 = 2.3;
+
+/// Lines per Gemini call. Long videos (thousands of segments) overflow the
+/// model's output-token cap when sent as one request — the response gets clipped
+/// mid-JSON ("EOF while parsing a string"). Chunking keeps every response small
+/// enough to complete; ~80 short dialogue lines stay well under the cap.
+const TRANSLATE_CHUNK: usize = 80;
+/// Already-translated lines carried into the next chunk as context so address
+/// terms / register stay consistent across the chunk boundary.
+const TRANSLATE_CONTEXT: usize = 10;
+/// Seconds to wait between chunks ONCE a call has been rate-limited, to stay
+/// under the free-tier requests-per-minute ceiling instead of repeatedly firing
+/// then eating a 30s 429 backoff. A pro key never trips this (no pacing).
+const TRANSLATE_PACE_SECS: u64 = 5;
+
+/// Translate every line in safe-sized chunks, carrying a short rolling context
+/// across boundaries (so xưng hô stays consistent over a long script), and
+/// self-healing any ids the model drops. Returns id → Vietnamese.
+async fn translate_all(
+    client: &GeminiClient,
+    lang: &str,
+    lines: &[TranslateLine],
+) -> Result<HashMap<i64, String>> {
+    let mut out: HashMap<i64, String> = HashMap::new();
+    // Rolling tail of (source, vi) pairs from the most recent chunk.
+    let mut context: Vec<(String, String)> = Vec::new();
+    for (i, chunk) in lines.chunks(TRANSLATE_CHUNK).enumerate() {
+        // Pace only after a 429 has been seen (free-tier key); a pro key stays
+        // un-paced and runs at full speed.
+        if i > 0 && client.is_throttled() {
+            tokio::time::sleep(std::time::Duration::from_secs(TRANSLATE_PACE_SECS)).await;
+        }
+        let got = translate_chunk(client, lang, chunk, &context).await?;
+        for (id, vi) in &got {
+            out.insert(*id, vi.clone());
+        }
+        // Rebuild context from the END of this chunk, in chronological order,
+        // skipping any line the model still failed to translate.
+        let mut tail: Vec<(String, String)> = Vec::new();
+        for l in chunk {
+            if let Some(vi) = out.get(&l.id) {
+                tail.push((l.text.clone(), vi.clone()));
+            }
+        }
+        let keep = tail.len().saturating_sub(TRANSLATE_CONTEXT);
+        context = tail.split_off(keep);
+    }
+    Ok(out)
+}
+
+/// Translate one chunk, then re-request any ids missing from the result —
+/// recovering from a clipped response (salvage parsing returns the complete
+/// objects; the rest are retried). Splits the request in half when the model
+/// returns nothing, to shrink the output. Recursion terminates: a single
+/// untranslatable line is returned as-is (its id simply stays unset upstream).
+type TranslateFut<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<(i64, String)>>> + Send + 'a>>;
+
+fn translate_chunk<'a>(
+    client: &'a GeminiClient,
+    lang: &'a str,
+    lines: &'a [TranslateLine],
+    context: &'a [(String, String)],
+) -> TranslateFut<'a> {
+    Box::pin(async move {
+        let mut got = client.translate(lang, lines, context).await?;
+        if lines.len() <= 1 {
+            return Ok(got);
+        }
+        let have: HashSet<i64> = got.iter().map(|(id, _)| *id).collect();
+        let missing: Vec<TranslateLine> = lines
+            .iter()
+            .filter(|l| !have.contains(&l.id))
+            .cloned()
+            .collect();
+        if missing.is_empty() {
+            return Ok(got);
+        }
+        if missing.len() == lines.len() {
+            // No progress (likely the whole response was clipped) — halve the
+            // request so each side produces a shorter, completable response.
+            let mid = lines.len() / 2;
+            let mut a = translate_chunk(client, lang, &lines[..mid], context).await?;
+            let b = translate_chunk(client, lang, &lines[mid..], context).await?;
+            a.extend(b);
+            return Ok(a);
+        }
+        // Partial: retry just the dropped ids (same context).
+        let more = translate_chunk(client, lang, &missing, context).await?;
+        got.extend(more);
+        Ok(got)
+    })
+}
 
 fn project_dir(services: &Services, project_id: &str) -> PathBuf {
     services.work_dir.join("dub").join(project_id)
@@ -183,8 +275,7 @@ pub async fn translate(services: &Services, project_id: &str) -> Result<()> {
         .collect();
 
     let client = GeminiClient::new(key, model);
-    let translated = client.translate(&lang, &lines).await?;
-    let by_idx: HashMap<i64, String> = translated.into_iter().collect();
+    let by_idx = translate_all(&client, &lang, &lines).await?;
     for s in &segs {
         if let Some(vi) = by_idx.get(&s.idx) {
             services.db.set_dub_segment_text(&s.id, vi).await?;
@@ -377,8 +468,7 @@ pub async fn reshorten_long(services: &Services, project_id: &str) -> Result<usi
         })
         .collect();
     let client = GeminiClient::new(key, model);
-    let translated = client.translate(&lang, &lines).await?;
-    let by_idx: HashMap<i64, String> = translated.into_iter().collect();
+    let by_idx = translate_all(&client, &lang, &lines).await?;
 
     let speakers = services.db.get_dub_speakers(project_id).await?;
     let voice_by_speaker: HashMap<String, Option<String>> =
@@ -674,7 +764,10 @@ async fn export_composited(
         if c.kind == "video" {
             if let Some(src) = c.source.as_deref() {
                 if !has_audio.contains_key(src) {
-                    has_audio.insert(src.to_string(), media::has_audio_stream(Path::new(src)).await);
+                    has_audio.insert(
+                        src.to_string(),
+                        media::has_audio_stream(Path::new(src)).await,
+                    );
                 }
             }
         }

@@ -1502,7 +1502,7 @@ mod tests {
             w: 0.5,
             opacity: 1.0,
             text: None,
-        audio: false,
+            audio: false,
         }];
         let a = compose_export_args(&clips, 6.0, (1000, 600), &p("o.mp4"), true, None);
         let j = a.join(" ");
@@ -1533,7 +1533,7 @@ mod tests {
             w: 1.0,
             opacity: 1.0,
             text: None,
-        audio: false,
+            audio: false,
         }];
         let j = compose_export_args(&clips, 4.0, (1280, 720), &p("o.mp4"), true, None).join(" ");
         assert!(j.contains(
@@ -1562,7 +1562,7 @@ mod tests {
                 w: 0.3,
                 opacity: 0.5,
                 text: None,
-            audio: false,
+                audio: false,
             },
             ClipArg {
                 kind: ClipKind::Text,
@@ -1576,7 +1576,7 @@ mod tests {
                 w: 1.0,
                 opacity: 1.0,
                 text: Some("Xin chào: 100%"),
-            audio: false,
+                audio: false,
             },
         ];
         let j = compose_export_args(&clips, 6.0, (1000, 1000), &p("o.mp4"), true, None).join(" ");
@@ -1638,7 +1638,7 @@ mod tests {
                 w: 1.0,
                 opacity: 1.0,
                 text: None,
-            audio: false,
+                audio: false,
             },
             ClipArg {
                 kind: ClipKind::Audio,
@@ -1652,7 +1652,7 @@ mod tests {
                 w: 1.0,
                 opacity: 1.0,
                 text: None,
-            audio: false,
+                audio: false,
             },
             // a text/subtitle clip — must NOT break the render even without drawtext
             ClipArg {
@@ -1667,7 +1667,7 @@ mod tests {
                 w: 1.0,
                 opacity: 1.0,
                 text: Some("Xin chào"),
-            audio: false,
+                audio: false,
             },
         ];
         let text_ok = has_filter("drawtext").await;
@@ -1741,7 +1741,7 @@ mod tests {
             w: 1.0,
             opacity: 1.0,
             text: None,
-        audio: false,
+            audio: false,
         }];
         let burn = SubtitleBurn {
             ass: &ass_path,
@@ -1770,7 +1770,7 @@ mod tests {
                 w: 0.3,
                 opacity: 1.0,
                 text: None,
-            audio: false,
+                audio: false,
             },
             ClipArg {
                 kind: ClipKind::Text,
@@ -1784,7 +1784,7 @@ mod tests {
                 w: 1.0,
                 opacity: 1.0,
                 text: Some("Xin chào"),
-            audio: false,
+                audio: false,
             },
         ];
         // drawtext available → the subtitle is drawn.
@@ -1818,7 +1818,7 @@ mod tests {
             w: 1.0,
             opacity: 1.0,
             text: Some("Xin chào"),
-        audio: false,
+            audio: false,
         }];
         let burn = SubtitleBurn {
             ass: &ass,
@@ -1849,7 +1849,7 @@ mod tests {
                 w: 1.0,
                 opacity: 1.0,
                 text: None,
-            audio: false,
+                audio: false,
             },
             ClipArg {
                 kind: ClipKind::Video,
@@ -1863,7 +1863,7 @@ mod tests {
                 w: 0.35,
                 opacity: 1.0,
                 text: None,
-            audio: false,
+                audio: false,
             },
         ];
         let j = compose_export_args(&clips, 10.0, (1920, 1080), &p("o.mp4"), true, None).join(" ");
