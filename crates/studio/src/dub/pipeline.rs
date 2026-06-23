@@ -79,6 +79,30 @@ where
     }
 }
 
+/// Run an ffmpeg encode while streaming its real `-progress` percentage to the
+/// UI (and console). Throttled to whole-percent steps so the DB isn't hammered.
+async fn run_ffmpeg_with_progress(
+    services: &Services,
+    project_id: &str,
+    label: &str,
+    total_s: f64,
+    args: &[String],
+) -> Result<()> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<f64>();
+    let consume = async {
+        let mut last = -1i64;
+        while let Some(frac) = rx.recv().await {
+            let pct = (frac * 100.0).floor() as i64;
+            if pct != last {
+                last = pct;
+                report(services, project_id, Some(frac), label).await;
+            }
+        }
+    };
+    let (res, _) = tokio::join!(media::run_ffmpeg_progress(args, total_s, tx), consume);
+    res
+}
+
 /// Translate every line in safe-sized chunks, carrying a short rolling context
 /// across boundaries (so xưng hô stays consistent over a long script), and
 /// self-healing any ids the model drops. Reports per-chunk progress. Returns
@@ -920,8 +944,42 @@ async fn export_composited(
     let use_ass = project.burn_subtitles && media::has_filter("subtitles").await;
     let drop_text = use_ass || !project.burn_subtitles;
 
-    let clip_args: Vec<media::ClipArg> = ordered
+    // Pre-mix the per-segment TTS audio clips into ONE track in Rust, so ffmpeg
+    // gets a single audio input instead of `amix`-ing hundreds (which made long
+    // videos take ~an hour). Each clip's start/in/dur/volume is baked in here.
+    let audio_sources: Vec<media::MixSource> = ordered
         .iter()
+        .filter(|c| c.kind == "audio")
+        .filter_map(|c| {
+            c.source.as_deref().map(|src| media::MixSource {
+                path: PathBuf::from(src),
+                start_s: c.start_s,
+                in_s: c.in_s,
+                dur_s: c.dur_s,
+                volume: c.volume as f32,
+            })
+        })
+        .collect();
+    let vn_mixed = dir.join("vn_mixed.wav");
+    let has_premixed = if audio_sources.is_empty() {
+        false
+    } else {
+        let out_path = vn_mixed.clone();
+        let total = total_s;
+        tokio::task::spawn_blocking(move || {
+            media::mix_sources_to_wav(&audio_sources, total, &out_path)
+        })
+        .await
+        .map_err(|e| anyhow!("tác vụ trộn audio lỗi: {e}"))?
+        .context("trộn audio cho export")?;
+        true
+    };
+
+    // Video/image/text clips keep their ClipArgs; audio clips are replaced by the
+    // single pre-mixed track appended below.
+    let mut clip_args: Vec<media::ClipArg> = ordered
+        .iter()
+        .filter(|c| c.kind != "audio")
         .filter(|c| !(drop_text && c.kind == "text"))
         .map(|c| media::ClipArg {
             kind: kind(&c.kind),
@@ -942,6 +1000,23 @@ async fn export_composited(
                     .unwrap_or(false),
         })
         .collect();
+    if has_premixed {
+        // Gain already applied in the mix → volume 1.0 here.
+        clip_args.push(media::ClipArg {
+            kind: media::ClipKind::Audio,
+            source: Some(&vn_mixed),
+            start: 0.0,
+            dur: total_s,
+            in_s: 0.0,
+            volume: 1.0,
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            opacity: 0.0,
+            text: None,
+            audio: false,
+        });
+    }
 
     let out = dir.join("export.mp4");
 
@@ -991,21 +1066,10 @@ async fn export_composited(
         ass: a,
         fonts_dir: f,
     });
-    with_heartbeat(
-        services,
-        project_id,
-        &format!("Dựng & xuất video ({} clip)", clip_args.len()),
-        media::run_ffmpeg(&media::compose_export_args(
-            &clip_args,
-            total_s,
-            frame,
-            &out,
-            text_ok,
-            subtitle_burn,
-        )),
-    )
-    .await
-    .context("dựng timeline (compositing)")?;
+    let args = media::compose_export_args(&clip_args, total_s, frame, &out, text_ok, subtitle_burn);
+    run_ffmpeg_with_progress(services, project_id, "Dựng & xuất video", total_s, &args)
+        .await
+        .context("dựng timeline (compositing)")?;
     services
         .db
         .set_dub_field(

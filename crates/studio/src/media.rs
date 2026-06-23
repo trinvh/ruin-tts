@@ -159,59 +159,107 @@ fn read_wav_mono(path: &Path) -> Result<(Vec<f32>, u32)> {
     Ok((mono, spec.sample_rate))
 }
 
+/// One positioned audio clip for the Rust mixer.
+pub struct MixSource {
+    pub path: PathBuf,
+    /// Timeline start (seconds) where this clip is placed.
+    pub start_s: f64,
+    /// Trim this many seconds from the source's start before placing it.
+    pub in_s: f64,
+    /// Clip length (seconds) to take after `in_s`; `0` = the whole remaining file.
+    pub dur_s: f64,
+    /// Linear gain applied to this clip's samples.
+    pub volume: f32,
+}
+
+/// Mix whole files at their offsets (gain 1, no trim) — the simple case used by
+/// the VN track assembly. Thin wrapper over [`mix_sources_to_wav`].
+pub fn mix_clips_to_wav(clips: &[(PathBuf, f64)], total_secs: f64, out: &Path) -> Result<()> {
+    let srcs: Vec<MixSource> = clips
+        .iter()
+        .map(|(p, s)| MixSource {
+            path: p.clone(),
+            start_s: *s,
+            in_s: 0.0,
+            dur_s: 0.0,
+            volume: 1.0,
+        })
+        .collect();
+    mix_sources_to_wav(&srcs, total_secs, out)
+}
+
 /// Mix many time-positioned mono clips into one WAV by summing PCM samples
 /// directly in Rust — O(total audio), avoiding ffmpeg `amix`'s thousands-of-input
 /// filtergraph blow-up that makes long videos (2000+ segments) crawl or hang.
+/// Each clip's `in_s` trim, `dur_s` cap and `volume` gain are applied here, so a
+/// whole timeline of per-segment clips collapses to a single ffmpeg input.
 ///
 /// All clips are assumed to share one sample rate (same TTS engine); a clip at a
 /// different rate, or one that won't read, is skipped with a warning rather than
 /// corrupting the timeline. The summed signal is clamped on write (matching the
 /// old `amix=normalize=0` behaviour). Returns an error only if NOTHING is mixable.
-pub fn mix_clips_to_wav(clips: &[(PathBuf, f64)], total_secs: f64, out: &Path) -> Result<()> {
+pub fn mix_sources_to_wav(clips: &[MixSource], total_secs: f64, out: &Path) -> Result<()> {
     // Working rate from the first readable clip's header.
     let rate = clips
         .iter()
-        .find_map(|(p, _)| hound::WavReader::open(p).ok().map(|r| r.spec().sample_rate))
+        .find_map(|c| {
+            hound::WavReader::open(&c.path)
+                .ok()
+                .map(|r| r.spec().sample_rate)
+        })
         .ok_or_else(|| anyhow!("không đọc được đoạn âm thanh nào để ghép"))?;
 
+    // Samples to take from one clip after trimming `in_s` and capping `dur_s`.
+    let take_len = |c: &MixSource, available: usize| -> usize {
+        let skip = (c.in_s.max(0.0) * rate as f64).round() as usize;
+        let rest = available.saturating_sub(skip);
+        if c.dur_s > 0.0 {
+            rest.min((c.dur_s * rate as f64).round() as usize)
+        } else {
+            rest
+        }
+    };
+
     // Pass 1 — size the accumulator from the WAV *headers* (cheap: `duration()`
-    // reads the header, not the samples), so we allocate exactly once instead of
-    // growing it per clip, and the caller needn't ffprobe each clip's length.
+    // reads the header, not the samples), so we allocate exactly once.
     let mut total_len = ((total_secs.max(0.0) * rate as f64).ceil() as usize) + 1;
-    for (path, start) in clips {
-        if let Ok(r) = hound::WavReader::open(path) {
+    for c in clips {
+        if let Ok(r) = hound::WavReader::open(&c.path) {
             if r.spec().sample_rate == rate {
-                let offset = (start.max(0.0) * rate as f64).round() as usize;
-                total_len = total_len.max(offset + r.duration() as usize);
+                let offset = (c.start_s.max(0.0) * rate as f64).round() as usize;
+                total_len = total_len.max(offset + take_len(c, r.duration() as usize));
             }
         }
     }
     let mut acc = vec![0.0f32; total_len];
 
-    // Pass 2 — decode each clip and sum its samples at the right offset.
+    // Pass 2 — decode each clip and sum (trimmed, gained) samples at its offset.
     let mut mixed = 0usize;
-    for (path, start) in clips {
-        let (samples, r) = match read_wav_mono(path) {
+    for c in clips {
+        let (samples, r) = match read_wav_mono(&c.path) {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!("ghép track: bỏ qua {}: {e}", path.display());
+                tracing::warn!("ghép track: bỏ qua {}: {e}", c.path.display());
                 continue;
             }
         };
         if r != rate {
             tracing::warn!(
                 "ghép track: {} có sample rate {r} ≠ {rate}, bỏ qua",
-                path.display()
+                c.path.display()
             );
             continue;
         }
-        let offset = (start.max(0.0) * rate as f64).round() as usize;
-        let end = offset + samples.len();
-        if end > acc.len() {
-            acc.resize(end, 0.0);
-        }
-        for (i, s) in samples.iter().enumerate() {
-            acc[offset + i] += *s;
+        let offset = (c.start_s.max(0.0) * rate as f64).round() as usize;
+        let skip = (c.in_s.max(0.0) * rate as f64).round() as usize;
+        let take = take_len(c, samples.len());
+        let vol = c.volume.max(0.0);
+        for k in 0..take {
+            let idx = offset + k;
+            if idx >= acc.len() {
+                break;
+            }
+            acc[idx] += samples[skip + k] * vol;
         }
         mixed += 1;
     }
@@ -1110,6 +1158,79 @@ pub async fn run_ffmpeg(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Like [`run_ffmpeg`] but streams ffmpeg's `-progress` output, sending the
+/// completed fraction (0..1, against `total_secs`) over `tx` as the encode runs.
+/// Used for the export so the UI shows a real percentage. `tx` closes when the
+/// process finishes.
+pub async fn run_ffmpeg_progress(
+    args: &[String],
+    total_secs: f64,
+    tx: tokio::sync::mpsc::UnboundedSender<f64>,
+) -> Result<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+
+    let mut child = tokio::process::Command::new(ffmpeg_bin())
+        // `-progress pipe:1` (a global option) must precede the inputs/output.
+        .args([
+            "-hide_banner",
+            "-nostats",
+            "-loglevel",
+            "error",
+            "-progress",
+            "pipe:1",
+        ])
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true) // a cancelled run drops this future → kill ffmpeg
+        .spawn()
+        .context("spawn ffmpeg (is it installed?)")?;
+
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    // Drain stderr concurrently so a chatty build can't deadlock on a full pipe.
+    let stderr_task = tokio::spawn(async move {
+        let mut s = String::new();
+        let _ = BufReader::new(stderr).read_to_string(&mut s).await;
+        s
+    });
+
+    let total = total_secs.max(0.1);
+    let mut lines = BufReader::new(stdout).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        // ffmpeg emits `out_time_us=<µs>` (and a legacy `out_time_ms=` that is
+        // ALSO microseconds in practice) once per progress tick.
+        let micros = line
+            .strip_prefix("out_time_us=")
+            .or_else(|| line.strip_prefix("out_time_ms="))
+            .and_then(|v| v.trim().parse::<i64>().ok());
+        if let Some(us) = micros {
+            let frac = (us as f64 / 1_000_000.0 / total).clamp(0.0, 1.0);
+            let _ = tx.send(frac);
+        }
+    }
+    drop(tx); // close the channel so the consumer loop ends
+
+    let status = child.wait().await.context("chờ ffmpeg")?;
+    let stderr_str = stderr_task.await.unwrap_or_default();
+    if !status.success() {
+        let tail: String = {
+            let ls: Vec<&str> = stderr_str
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .collect();
+            ls[ls.len().saturating_sub(8)..].join("\n")
+        };
+        let detail = if tail.trim().is_empty() {
+            "(không có stderr — kiểm tra cài đặt ffmpeg)".to_string()
+        } else {
+            tail
+        };
+        return Err(anyhow!("ffmpeg lỗi ({status}):\n{detail}"));
+    }
+    Ok(())
+}
+
 /// Probe a media file's key info (duration, size, video/audio codec, resolution,
 /// fps) via `ffprobe`, returned as a trimmed JSON object for the UI.
 pub async fn probe_media_info(path: &Path) -> Result<serde_json::Value> {
@@ -1277,6 +1398,49 @@ mod tests {
         assert!(approx(got[0], 0.5)); // A only
         assert!(approx(got[2], 0.75)); // A + B
         assert!(approx(got[5], 0.25)); // B only
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mix_sources_applies_volume_and_in_trim() {
+        let dir = std::env::temp_dir().join(format!("ruin_mixsrc_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 8000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let path = dir.join("c.wav");
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for v in [1.0f32, 1.0, 0.5, 0.5, 0.5, 0.5] {
+            w.write_sample((v * 32767.0) as i16).unwrap();
+        }
+        w.finalize().unwrap();
+
+        let out = dir.join("o.wav");
+        // Skip the first 2 samples (in_s) and halve the gain (volume=0.5).
+        mix_sources_to_wav(
+            &[MixSource {
+                path,
+                start_s: 0.0,
+                in_s: 2.0 / 8000.0,
+                dur_s: 0.0,
+                volume: 0.5,
+            }],
+            0.0,
+            &out,
+        )
+        .unwrap();
+        let got: Vec<i16> = hound::WavReader::open(&out)
+            .unwrap()
+            .into_samples::<i16>()
+            .map(|s| s.unwrap())
+            .collect();
+        let approx = |v: i16, t: f32| (v as f32 / 32767.0 - t).abs() < 0.01;
+        assert_eq!(got.len(), 4); // 6 − 2 trimmed
+        assert!(approx(got[0], 0.25)); // 0.5 × 0.5
+        assert!(approx(got[3], 0.25));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
