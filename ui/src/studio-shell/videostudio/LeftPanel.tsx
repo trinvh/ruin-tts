@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { C, FONT, MONO } from "../theme";
 import { Icon } from "../icons";
 import { HoverBox } from "../ui";
@@ -95,6 +96,8 @@ function DubTab({ dub }: { dub: DubProjectHook }) {
   const status = p.status;
   const di = doneIdx(status);
   const working = dub.busy || dub.autoRun;
+  // Re-running "Đọc TTS" prompts: regenerate from scratch vs reuse the cache.
+  const [reSynth, setReSynth] = useState(false);
   // A step failed if the project carries an error: status was reverted to that
   // step's prerequisite, so the failed step is the current "next" one.
   const projErr = p.error?.trim() ? p.error : null;
@@ -148,13 +151,30 @@ function DubTab({ dub }: { dub: DubProjectHook }) {
               progressLabel={running ? p.progress_label : undefined}
               error={failed ? projErr : undefined}
               runLabel={failed ? "Thử lại" : done ? "Chạy lại" : meta.runLabel}
-              onRun={() => dub.run(meta.step)}
+              onRun={
+                meta.step === "synthesize" && done && !failed
+                  ? () => setReSynth(true) // ask cache vs regenerate
+                  : () => dub.run(meta.step)
+              }
               previewLines={previewLines}
               voice={meta.step === "synthesize" && !locked ? curVoice : undefined}
               voiceOpts={dub.voiceOpts}
               onVoice={(v) => void dub.setAllSpeakerVoice(v || null)}
               extra={
-                meta.step === "translate" && done && dub.longCount > 0 ? (
+                meta.step === "synthesize" && reSynth ? (
+                  <ReSynthPrompt
+                    working={working}
+                    onCancel={() => setReSynth(false)}
+                    onCache={() => {
+                      setReSynth(false);
+                      void dub.run("synthesize", false);
+                    }}
+                    onForce={() => {
+                      setReSynth(false);
+                      void dub.run("synthesize", true);
+                    }}
+                  />
+                ) : meta.step === "translate" && done && dub.longCount > 0 ? (
                   <div style={{ marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, border: "1px solid rgba(255,181,114,.3)", background: "rgba(255,181,114,.1)", borderRadius: 7, padding: "7px 9px" }}>
                     <span style={{ fontSize: 10.5, color: C.orange }}>{dub.longCount} câu quá dài</span>
                     <button onClick={() => void dub.reshorten()} disabled={working} style={{ border: "none", background: "rgba(255,181,114,.2)", color: C.orange, borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 600, cursor: working ? "default" : "pointer", fontFamily: FONT }}>Dịch ngắn lại</button>
@@ -165,6 +185,30 @@ function DubTab({ dub }: { dub: DubProjectHook }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/** Inline prompt shown when re-running "Đọc TTS": reuse cache vs regenerate. */
+function ReSynthPrompt({ working, onCache, onForce, onCancel }: { working: boolean; onCache: () => void; onForce: () => void; onCancel: () => void }) {
+  const opt: React.CSSProperties = {
+    width: "100%", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 1,
+    borderRadius: 7, padding: "7px 10px", cursor: working ? "default" : "pointer", fontFamily: FONT, fontSize: 12, textAlign: "left",
+  };
+  return (
+    <div style={{ marginTop: 10, border: `1px solid ${C.borderInset2}`, background: C.insetDark, borderRadius: 8, padding: "10px 11px" }}>
+      <div style={{ fontSize: 11.5, color: C.ink3, lineHeight: 1.5, marginBottom: 9 }}>Chạy lại phần Đọc TTS thế nào?</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        <button onClick={working ? undefined : onCache} disabled={working} style={{ ...opt, border: "1px solid rgba(146,136,224,.45)", background: "rgba(146,136,224,.14)", color: C.purpleLt }}>
+          <span style={{ fontWeight: 600 }}>Ưu tiên cache</span>
+          <span style={{ fontSize: 10, color: C.muted3 }}>chỉ đọc câu chưa có (nhanh)</span>
+        </button>
+        <button onClick={working ? undefined : onForce} disabled={working} style={{ ...opt, border: `1px solid ${C.borderInset2}`, background: "transparent", color: C.ink3 }}>
+          <span style={{ fontWeight: 600 }}>Sinh lại từ đầu</span>
+          <span style={{ fontSize: 10, color: C.muted3 }}>đọc lại toàn bộ, bỏ qua cache</span>
+        </button>
+      </div>
+      <button onClick={onCancel} style={{ marginTop: 8, border: "none", background: "transparent", color: C.muted3, fontSize: 11, cursor: "pointer", fontFamily: FONT, textDecoration: "underline" }}>Huỷ</button>
     </div>
   );
 }

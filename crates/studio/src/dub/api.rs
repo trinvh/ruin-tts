@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::{
     body::Bytes,
-    extract::{Multipart, Path as AxPath, State},
+    extract::{Multipart, Path as AxPath, Query, State},
     http::header,
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -359,17 +359,26 @@ async fn step_translate(
     .await
 }
 
+#[derive(Deserialize)]
+struct SynthQuery {
+    /// Regenerate every segment from scratch, bypassing the TTS cache.
+    #[serde(default)]
+    force: bool,
+}
+
 async fn step_synthesize(
     State(st): State<AppState>,
     AxPath(id): AxPath<String>,
+    Query(q): Query<SynthQuery>,
 ) -> Result<Json<Value>, AppError> {
+    let force = q.force;
     run_step(
         st,
         id,
         "translated",
         "synthesizing",
         "synthesized",
-        |s, id| async move { pipeline::synthesize(&s, &id).await },
+        move |s, id| async move { pipeline::synthesize(&s, &id, force).await },
     )
     .await
 }

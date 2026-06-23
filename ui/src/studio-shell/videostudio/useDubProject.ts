@@ -68,7 +68,8 @@ export interface DubProjectHook {
   /** seconds, from probed media or furthest segment */
   duration: number;
   refresh: () => Promise<void>;
-  run: (step: DubStep) => Promise<void>;
+  /** Run a step; `force` (synthesize only) regenerates, bypassing the TTS cache. */
+  run: (step: DubStep, force?: boolean) => Promise<void>;
   runTo: (target: "synthesized" | "done") => Promise<void>;
   cancel: () => Promise<void>;
   rename: (name: string) => Promise<void>;
@@ -171,10 +172,10 @@ export function useDubProject(id: string): DubProjectHook {
   const reachedIdx = ORDER.indexOf(status === "failed" || busy ? "" : status);
 
   const run = useCallback(
-    async (step: DubStep) => {
+    async (step: DubStep, force?: boolean) => {
       setErr(null);
       try {
-        await runDubStep(id, step);
+        await runDubStep(id, step, force);
         await refresh();
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));

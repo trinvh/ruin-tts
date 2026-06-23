@@ -417,7 +417,7 @@ async fn narrate_videos(services: &Services, node: &NodeDef, ctx: &mut RunContex
                         paragraph_silence_p: Some(p.paragraph_pause),
                     };
                     tracing::info!(chunk = vindex, chapter = num, "Narrate: tts chapter");
-                    tts.synth_cached(cache_dir, &c.id, p.workflow_version, &req, &p.voice)
+                    tts.synth_cached(cache_dir, &c.id, p.workflow_version, &req, &p.voice, false)
                         .await
                         .with_context(|| format!("đọc chương {num}"))
                 }

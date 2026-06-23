@@ -249,6 +249,7 @@ impl TtsClient {
         version: u32,
         req: &SynthRequest,
         cache_voice: &str,
+        force: bool,
     ) -> Result<PathBuf> {
         let key = cache_key(
             chapter_id,
@@ -258,7 +259,8 @@ impl TtsClient {
             &req.text,
         );
         let path = cache_dir.join(format!("{key}.{}", req.format));
-        if path.exists() {
+        // `force` regenerates even when a cached file exists (overwriting it).
+        if !force && path.exists() {
             return Ok(path);
         }
         let bytes = self.synth(req).await?;

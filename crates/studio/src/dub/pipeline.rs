@@ -368,14 +368,15 @@ pub async fn translate(services: &Services, project_id: &str) -> Result<()> {
 }
 
 // ── Step 4: synthesize each segment with vieneu, then fit to the slot ─────────
-pub async fn synthesize(services: &Services, project_id: &str) -> Result<()> {
+pub async fn synthesize(services: &Services, project_id: &str, force: bool) -> Result<()> {
     let project = services
         .db
         .get_dub_project(project_id)
         .await?
         .ok_or_else(|| anyhow!("không tìm thấy dự án"))?;
     // Re-run starts clean: drop the old TTS audio so it disappears from the
-    // timeline and is rebuilt below (cached segments repopulate instantly).
+    // timeline and is rebuilt below. With `force`, each segment regenerates;
+    // otherwise cached segments repopulate instantly.
     services.db.clear_dub_synth(project_id).await?;
     let segs = services.db.get_dub_segments(project_id).await?;
     let speakers = services.db.get_dub_speakers(project_id).await?;
@@ -410,6 +411,7 @@ pub async fn synthesize(services: &Services, project_id: &str) -> Result<()> {
             seg,
             &voice,
             project.speed_cap,
+            force,
             &ref_cache,
         )
         .await?;
@@ -466,6 +468,7 @@ async fn resolve_clone_voice(
 }
 
 /// Synthesize + time-fit a single segment (shared by full synth and reshorten).
+#[allow(clippy::too_many_arguments)]
 async fn synth_one(
     services: &Services,
     tts: &crate::tts::TtsClient,
@@ -474,6 +477,7 @@ async fn synth_one(
     seg: &DubSegment,
     voice: &str,
     speed_cap: f64,
+    force: bool,
     ref_cache: &std::sync::Mutex<HashMap<String, String>>,
 ) -> Result<()> {
     let (voice_sel, ref_id) = resolve_clone_voice(services, tts, voice, ref_cache).await?;
@@ -499,6 +503,7 @@ async fn synth_one(
             profile.workflow_version,
             &req,
             voice,
+            force,
         )
         .await
         .with_context(|| format!("đọc câu {} ({voice})", seg.idx))?;
@@ -594,6 +599,7 @@ pub async fn reshorten_long(services: &Services, project_id: &str) -> Result<usi
                 &updated,
                 &voice,
                 project.speed_cap,
+                false, // re-shortened text has a new cache key → no force needed
                 &ref_cache,
             )
             .await?;
