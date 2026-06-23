@@ -60,6 +60,10 @@ pub struct AppConfig {
     /// (vieneu's voice list carries no gender, so the operator sets these once).
     pub dub_voice_male: String,
     pub dub_voice_female: String,
+    /// Default cap on how many speakers diarization may find (pyannote
+    /// over-clusters long/noisy videos into hundreds of phantom speakers without
+    /// a ceiling). A project may override this; see `DubProject::max_speakers`.
+    pub dub_max_speakers: u32,
     pub profile: Profile,
 }
 
@@ -78,6 +82,7 @@ impl Default for AppConfig {
             gemini_model: "gemini-2.5-flash".into(),
             dub_voice_male: String::new(),
             dub_voice_female: String::new(),
+            dub_max_speakers: 4,
             profile: Profile::default(),
         }
     }

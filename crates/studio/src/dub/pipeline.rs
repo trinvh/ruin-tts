@@ -44,6 +44,41 @@ async fn report(services: &Services, project_id: &str, frac: Option<f64>, label:
     }
 }
 
+/// Run `fut` while emitting a heartbeat (console log + UI label carrying the
+/// elapsed seconds) every 15s, so a slow single-shot step (ffmpeg mux, sidecar
+/// analyse) is visibly *alive* instead of looking stuck — e.g. after a UI
+/// hot-reload when the operator can't tell if work is still running. Logs the
+/// total elapsed on completion.
+async fn with_heartbeat<F, T>(services: &Services, project_id: &str, what: &str, fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    let start = std::time::Instant::now();
+    tokio::pin!(fut);
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
+    tick.tick().await; // fires immediately — consume so the first beat lands at +15s
+    tracing::info!("dub[{project_id}] {what} — bắt đầu…");
+    loop {
+        tokio::select! {
+            r = &mut fut => {
+                tracing::info!(
+                    "dub[{project_id}] {what} — xong sau {:.1}s",
+                    start.elapsed().as_secs_f64()
+                );
+                return r;
+            }
+            _ = tick.tick() => {
+                let secs = start.elapsed().as_secs();
+                tracing::info!("dub[{project_id}] {what} — vẫn đang chạy ({secs}s)…");
+                let _ = services
+                    .db
+                    .set_dub_progress(project_id, None, &format!("{what}… ({secs}s)"))
+                    .await;
+            }
+        }
+    }
+}
+
 /// Translate every line in safe-sized chunks, carrying a short rolling context
 /// across boundaries (so xưng hô stays consistent over a long script), and
 /// self-healing any ids the model drops. Reports per-chunk progress. Returns
@@ -203,7 +238,13 @@ pub async fn analyze(services: &Services, project_id: &str) -> Result<()> {
         "Nhận dạng lời thoại + tách người nói (có thể mất vài phút)…",
     )
     .await;
-    let res = client.analyze(&audio, None, None).await?;
+    let res = with_heartbeat(
+        services,
+        project_id,
+        "Nhận dạng lời thoại + tách người nói",
+        client.analyze(&audio, None, None),
+    )
+    .await?;
 
     // Replace garbled overlap segments with the per-speaker transcripts recovered
     // by source separation, so each simultaneous speaker is voiced + subtitled.
@@ -568,27 +609,37 @@ pub async fn build_track(services: &Services, project_id: &str) -> Result<()> {
     // Place each fitted clip at its *absolute* start time and mix (not serial
     // concat), so the dub tracks the original timeline exactly — overlapping
     // speech overlaps in the output instead of being pushed out / drifting.
+    // Collect (fitted clip, absolute start). Length is read from each WAV header
+    // inside the mixer — no per-clip ffprobe (2000+ of those alone crawl).
     let mut clips: Vec<(PathBuf, f64)> = Vec::new();
     let mut total = 0.0_f64;
     for seg in &segs {
         let Some(path) = &seg.fitted_path else {
             continue;
         };
-        let p = PathBuf::from(path);
-        let dur = media::probe_duration(&p)
-            .await
-            .unwrap_or_else(|_| seg.slot());
         let start = seg.placed_start().max(0.0);
-        total = total.max(start + dur);
-        clips.push((p, start));
+        total = total.max(start); // lower bound; the mixer extends to each clip's true end
+        clips.push((PathBuf::from(path), start));
     }
     if clips.is_empty() {
         return Err(anyhow!("chưa có đoạn tiếng Việt nào — chạy bước đọc trước"));
     }
     let out = dir.join("vn_track.wav");
-    media::run_ffmpeg(&media::mix_at_times_args(&clips, total, &out))
-        .await
-        .context("ghép track tiếng Việt")?;
+    // Mix by summing PCM samples in Rust (off the async runtime), not a giant
+    // ffmpeg `amix` — the latter hangs on long videos with thousands of inputs.
+    let n = clips.len();
+    let out_path = out.clone();
+    let mix =
+        tokio::task::spawn_blocking(move || media::mix_clips_to_wav(&clips, total, &out_path));
+    with_heartbeat(
+        services,
+        project_id,
+        &format!("Ghép track tiếng Việt ({n} đoạn)"),
+        mix,
+    )
+    .await
+    .map_err(|e| anyhow!("tác vụ ghép track lỗi: {e}"))?
+    .context("ghép track tiếng Việt")?;
     services
         .db
         .set_dub_field(project_id, "vn_track_path", &out.to_string_lossy())
@@ -637,14 +688,19 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
     // their track volumes), no frames or subtitles.
     if !project.video_enabled {
         let out = dir.join("export.m4a");
-        media::run_ffmpeg(&media::export_audio_args(
-            video,
-            Path::new(&vn),
-            &out,
-            project.original_volume,
-            project.vn_volume,
-            project.video_offset_s,
-        ))
+        with_heartbeat(
+            services,
+            project_id,
+            "Xuất âm thanh tiếng Việt",
+            media::run_ffmpeg(&media::export_audio_args(
+                video,
+                Path::new(&vn),
+                &out,
+                project.original_volume,
+                project.vn_volume,
+                project.video_offset_s,
+            )),
+        )
         .await
         .context("xuất âm thanh tiếng Việt")?;
         services
@@ -753,12 +809,17 @@ pub async fn export(services: &Services, project_id: &str) -> Result<()> {
         overlays: overlay_args,
         lead_in: project.video_offset_s,
     };
-    media::run_ffmpeg(&media::export_video_args(
-        Path::new(&project.video_path),
-        Path::new(&vn),
-        &out,
-        &opts,
-    ))
+    with_heartbeat(
+        services,
+        project_id,
+        "Ghép video tiếng Việt (encode)",
+        media::run_ffmpeg(&media::export_video_args(
+            Path::new(&project.video_path),
+            Path::new(&vn),
+            &out,
+            &opts,
+        )),
+    )
     .await
     .context("ghép video tiếng Việt")?;
     services
@@ -915,14 +976,19 @@ async fn export_composited(
         ass: a,
         fonts_dir: f,
     });
-    media::run_ffmpeg(&media::compose_export_args(
-        &clip_args,
-        total_s,
-        frame,
-        &out,
-        text_ok,
-        subtitle_burn,
-    ))
+    with_heartbeat(
+        services,
+        project_id,
+        &format!("Dựng & xuất video ({} clip)", clip_args.len()),
+        media::run_ffmpeg(&media::compose_export_args(
+            &clip_args,
+            total_s,
+            frame,
+            &out,
+            text_ok,
+            subtitle_burn,
+        )),
+    )
     .await
     .context("dựng timeline (compositing)")?;
     services

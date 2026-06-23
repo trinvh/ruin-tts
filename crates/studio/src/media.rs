@@ -174,6 +174,116 @@ pub fn mix_at_times_args(clips: &[(PathBuf, f64)], total_secs: f64, out: &Path) 
     args
 }
 
+/// Read a WAV file as mono `f32` samples plus its sample rate, downmixing any
+/// multi-channel input by averaging. Handles both integer and float PCM (the
+/// fitted clips are a mix of vieneu output and ffmpeg-`atempo` output).
+fn read_wav_mono(path: &Path) -> Result<(Vec<f32>, u32)> {
+    let mut reader =
+        hound::WavReader::open(path).with_context(|| format!("đọc wav {}", path.display()))?;
+    let spec = reader.spec();
+    let ch = spec.channels.max(1) as usize;
+    let interleaved: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
+        hound::SampleFormat::Int => {
+            let scale = 1.0 / (1i64 << (spec.bits_per_sample - 1)) as f32;
+            reader
+                .samples::<i32>()
+                .filter_map(|s| s.ok())
+                .map(|v| v as f32 * scale)
+                .collect()
+        }
+    };
+    let mono = if ch <= 1 {
+        interleaved
+    } else {
+        interleaved
+            .chunks(ch)
+            .map(|c| c.iter().sum::<f32>() / ch as f32)
+            .collect()
+    };
+    Ok((mono, spec.sample_rate))
+}
+
+/// Mix many time-positioned mono clips into one WAV by summing PCM samples
+/// directly in Rust — O(total audio), avoiding ffmpeg `amix`'s thousands-of-input
+/// filtergraph blow-up that makes long videos (2000+ segments) crawl or hang.
+///
+/// All clips are assumed to share one sample rate (same TTS engine); a clip at a
+/// different rate, or one that won't read, is skipped with a warning rather than
+/// corrupting the timeline. The summed signal is clamped on write (matching the
+/// old `amix=normalize=0` behaviour). Returns an error only if NOTHING is mixable.
+pub fn mix_clips_to_wav(clips: &[(PathBuf, f64)], total_secs: f64, out: &Path) -> Result<()> {
+    // Working rate from the first readable clip's header.
+    let rate = clips
+        .iter()
+        .find_map(|(p, _)| hound::WavReader::open(p).ok().map(|r| r.spec().sample_rate))
+        .ok_or_else(|| anyhow!("không đọc được đoạn âm thanh nào để ghép"))?;
+
+    // Pass 1 — size the accumulator from the WAV *headers* (cheap: `duration()`
+    // reads the header, not the samples), so we allocate exactly once instead of
+    // growing it per clip, and the caller needn't ffprobe each clip's length.
+    let mut total_len = ((total_secs.max(0.0) * rate as f64).ceil() as usize) + 1;
+    for (path, start) in clips {
+        if let Ok(r) = hound::WavReader::open(path) {
+            if r.spec().sample_rate == rate {
+                let offset = (start.max(0.0) * rate as f64).round() as usize;
+                total_len = total_len.max(offset + r.duration() as usize);
+            }
+        }
+    }
+    let mut acc = vec![0.0f32; total_len];
+
+    // Pass 2 — decode each clip and sum its samples at the right offset.
+    let mut mixed = 0usize;
+    for (path, start) in clips {
+        let (samples, r) = match read_wav_mono(path) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("ghép track: bỏ qua {}: {e}", path.display());
+                continue;
+            }
+        };
+        if r != rate {
+            tracing::warn!(
+                "ghép track: {} có sample rate {r} ≠ {rate}, bỏ qua",
+                path.display()
+            );
+            continue;
+        }
+        let offset = (start.max(0.0) * rate as f64).round() as usize;
+        let end = offset + samples.len();
+        if end > acc.len() {
+            acc.resize(end, 0.0);
+        }
+        for (i, s) in samples.iter().enumerate() {
+            acc[offset + i] += *s;
+        }
+        mixed += 1;
+    }
+    if mixed == 0 {
+        return Err(anyhow!("không có đoạn nào ghép được"));
+    }
+
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(out, spec)
+        .with_context(|| format!("tạo wav {}", out.display()))?;
+    for s in acc {
+        let v = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        writer
+            .write_sample(v)
+            .map_err(|e| anyhow!("ghi mẫu wav: {e}"))?;
+    }
+    writer
+        .finalize()
+        .map_err(|e| anyhow!("hoàn tất wav: {e}"))?;
+    Ok(())
+}
+
 /// Silence padding around the spoken parts of one chunk's voice track.
 #[derive(Debug, Clone, Copy)]
 pub struct VoiceDelays {
@@ -1198,6 +1308,44 @@ mod tests {
         let j = a.join(" ");
         assert!(j.contains("[0]adelay=1000[c0];"));
         assert!(j.contains("[1][c0]amix=inputs=2:normalize=0:duration=longest[out]"));
+    }
+
+    #[test]
+    fn mix_clips_to_wav_sums_overlapping_samples_at_offsets() {
+        let dir = std::env::temp_dir().join(format!("ruin_mix_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 8000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let write = |name: &str, val: f32, n: usize| {
+            let path = dir.join(name);
+            let mut w = hound::WavWriter::create(&path, spec).unwrap();
+            for _ in 0..n {
+                w.write_sample((val * 32767.0) as i16).unwrap();
+            }
+            w.finalize().unwrap();
+            path
+        };
+        let a = write("a.wav", 0.5, 4); // 4 samples @0.5 from t=0
+        let b = write("b.wav", 0.25, 4); // 4 samples @0.25 from sample 2
+        let out = dir.join("out.wav");
+        // B starts 2 samples in (2/8000 s) → overlaps A on samples 2,3.
+        mix_clips_to_wav(&[(a, 0.0), (b, 2.0 / 8000.0)], 0.0, &out).unwrap();
+
+        let got: Vec<i16> = hound::WavReader::open(&out)
+            .unwrap()
+            .into_samples::<i16>()
+            .map(|s| s.unwrap())
+            .collect();
+        let approx = |v: i16, target: f32| (v as f32 / 32767.0 - target).abs() < 0.01;
+        assert_eq!(got.len(), 6); // max(0+4, 2+4)
+        assert!(approx(got[0], 0.5)); // A only
+        assert!(approx(got[2], 0.75)); // A + B
+        assert!(approx(got[5], 0.25)); // B only
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

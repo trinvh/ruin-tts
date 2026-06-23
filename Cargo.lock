@@ -3242,6 +3242,7 @@ dependencies = [
  "clap",
  "futures",
  "handlebars",
+ "hound",
  "include_dir",
  "reqwest",
  "serde",
