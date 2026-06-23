@@ -129,51 +129,6 @@ pub fn assemble_args(parts: &[AudioPart], out: &Path) -> Vec<String> {
     args
 }
 
-/// Mix narration clips onto the source timeline: each clip is delayed to its
-/// absolute start (`adelay`) and summed (`amix`, no level normalization) over a
-/// silent base spanning `total_secs`. Clips land at exactly their start time and
-/// overlapping speech overlaps in the output (matching the original video)
-/// instead of being serialized + drifting. `clips` = (path, start_seconds).
-pub fn mix_at_times_args(clips: &[(PathBuf, f64)], total_secs: f64, out: &Path) -> Vec<String> {
-    let mut args = vec!["-y".to_string()];
-    for (p, _) in clips {
-        args.push("-i".into());
-        args.push(s(p));
-    }
-    // Silent base spanning the whole timeline (last input) so the track always
-    // covers the full duration even if no clip reaches the end.
-    let base_idx = clips.len();
-    args.extend([
-        "-f".into(),
-        "lavfi".into(),
-        "-t".into(),
-        format!("{:.3}", total_secs.max(0.0)),
-        "-i".into(),
-        "anullsrc=r=48000:cl=mono".into(),
-    ]);
-    let mut fc = String::new();
-    for (i, (_, start)) in clips.iter().enumerate() {
-        let ms = ((*start).max(0.0) * 1000.0).round() as i64;
-        fc.push_str(&format!("[{i}]adelay={ms}[c{i}];"));
-    }
-    fc.push_str(&format!("[{base_idx}]"));
-    for i in 0..clips.len() {
-        fc.push_str(&format!("[c{i}]"));
-    }
-    fc.push_str(&format!(
-        "amix=inputs={}:normalize=0:duration=longest[out]",
-        clips.len() + 1
-    ));
-    args.extend([
-        "-filter_complex".into(),
-        fc,
-        "-map".into(),
-        "[out]".into(),
-        s(out),
-    ]);
-    args
-}
-
 /// Read a WAV file as mono `f32` samples plus its sample rate, downmixing any
 /// multi-channel input by averaging. Handles both integer and float PCM (the
 /// fitted clips are a mix of vieneu output and ffmpeg-`atempo` output).
@@ -1285,29 +1240,6 @@ mod tests {
 
     fn p(s: &str) -> PathBuf {
         PathBuf::from(s)
-    }
-
-    #[test]
-    fn mix_at_times_places_clips_absolutely_and_mixes() {
-        let clips = vec![(p("a.wav"), 0.0), (p("b.wav"), 2.5)];
-        let a = mix_at_times_args(&clips, 9.0, &p("vn.wav"));
-        let j = a.join(" ");
-        // each clip delayed to its absolute start (ms), then summed
-        assert!(j.contains("[0]adelay=0[c0];"));
-        assert!(j.contains("[1]adelay=2500[c1];"));
-        // base (index 2 = clips.len()) + 2 clips → amix of 3, no normalization
-        assert!(j.contains("[2][c0][c1]amix=inputs=3:normalize=0:duration=longest[out]"));
-        // a silent base spanning the timeline is the last input
-        assert!(j.contains("anullsrc=r=48000:cl=mono"));
-        assert!(j.contains("-t 9.000"));
-    }
-
-    #[test]
-    fn mix_at_times_single_clip_still_mixes_over_base() {
-        let a = mix_at_times_args(&[(p("only.wav"), 1.0)], 5.0, &p("vn.wav"));
-        let j = a.join(" ");
-        assert!(j.contains("[0]adelay=1000[c0];"));
-        assert!(j.contains("[1][c0]amix=inputs=2:normalize=0:duration=longest[out]"));
     }
 
     #[test]
